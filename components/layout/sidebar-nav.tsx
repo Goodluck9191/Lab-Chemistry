@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { findActiveNavItem, type NavItem } from "./nav-items";
+import { NAV_MAP, findActiveNavItem } from "./nav-items";
 
-export function SidebarNav({ items, label }: { items: NavItem[]; label: string }) {
+export function SidebarNav({ navKey, label }: { navKey: string; label: string }) {
   const pathname = usePathname();
+  const items = NAV_MAP[navKey];
   const active = findActiveNavItem(items, pathname);
 
   return (
