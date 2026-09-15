@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+/* -----------------------------------------------------------------------------
+   Design tokens. Tailwind v4 is CSS-first: these custom properties ARE the theme
+   (there is no tailwind.config.js), and `@theme inline` exposes them as utility
+   classes such as bg-surface, text-muted, border-line.
+   -------------------------------------------------------------------------- */
+:root {
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --surface-muted: #f1f3f7;
+  --line: #e3e6ec;
+  --line-strong: #cbd1dd;
+  --foreground: #15171c;
+  --muted: #5c6373;
+
+  --primary: #0f6f6c;
+  --primary-foreground: #ffffff;
+  --accent: #1d4ed8;
+
+  --success: #157347;
+  --warning: #b45309;
+  --danger: #b42318;
+
+  /* laboratory palette (used by later simulation stages) */
+  --lab-glass: #dce6f1;
+  --lab-liquid: #cfe3ff;
+  --lab-endpoint: #d946a6;
+  --lab-precipitate: #efe3d3;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b0d12;
+    --surface: #12151c;
+    --surface-muted: #171b24;
+    --line: #232833;
+    --line-strong: #333a49;
+    --foreground: #e9ebf1;
+    --muted: #9aa2b4;
+
+    --primary: #2f9d97;
+    --primary-foreground: #04100f;
+    --accent: #7ba2ff;
+
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --danger: #f87171;
+
+    --lab-glass: #263041;
+    --lab-liquid: #1e3355;
+    --lab-endpoint: #d946a6;
+    --lab-precipitate: #3a3025;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-lab-glass: var(--lab-glass);
+  --color-lab-liquid: var(--lab-liquid);
+  --color-lab-endpoint: var(--lab-endpoint);
+  --color-lab-precipitate: var(--lab-precipitate);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Visible, consistent keyboard focus everywhere. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Honours the OS "reduce motion" setting: no transitions for anyone who asks. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Placeholder grid for the laboratory canvas in this stage. */
+.lab-canvas-grid {
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
