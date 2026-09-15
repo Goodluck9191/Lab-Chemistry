@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { requireStudent } from "@/application/auth/dal";
 import { AppShell } from "@/components/layout/app-shell";
-import { STUDENT_NAV_ITEMS } from "@/components/layout/nav-items";
 
 /**
  * Student area. `requireStudent()` runs on every request; a layout is not a
@@ -19,7 +18,7 @@ export default async function StudentLayout({ children }: { children: ReactNode 
 
   return (
     <AppShell
-      navItems={STUDENT_NAV_ITEMS}
+      navKey="student"
       navLabel="Student sections"
       user={{ fullName: profile.fullName, email: profile.email, role: profile.role }}
     >

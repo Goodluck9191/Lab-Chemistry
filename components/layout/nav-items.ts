@@ -31,6 +31,11 @@ export const INSTRUCTOR_NAV_ITEMS: NavItem[] = [
   { href: "/instructor/reports", label: "Reports", icon: FileText },
 ];
 
+export const NAV_MAP: Record<string, NavItem[]> = {
+  student: STUDENT_NAV_ITEMS,
+  instructor: INSTRUCTOR_NAV_ITEMS,
+};
+
 /** The nav item that should look active for a given pathname. */
 export function findActiveNavItem(items: NavItem[], pathname: string): NavItem | undefined {
   return items.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));

@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import type { UserRole } from "@/domain/profiles";
 import { AppHeader } from "./app-header";
 import { SidebarNav } from "./sidebar-nav";
-import type { NavItem } from "./nav-items";
 
 /**
  * The signed-in application shell: skip link, header, sidebar navigation and a
@@ -10,12 +9,12 @@ import type { NavItem } from "./nav-items";
  * real <nav> with a label so screen readers can jump straight to it.
  */
 export function AppShell({
-  navItems,
+  navKey,
   navLabel,
   user,
   children,
 }: {
-  navItems: NavItem[];
+  navKey: string;
   navLabel: string;
   user: { fullName: string; email: string; role: UserRole };
   children: ReactNode;
@@ -33,7 +32,7 @@ export function AppShell({
 
       <div className="flex flex-1 flex-col lg:flex-row">
         <aside className="border-b border-line bg-surface-muted px-3 py-3 lg:w-60 lg:shrink-0 lg:border-b-0 lg:border-r lg:px-3 lg:py-6">
-          <SidebarNav items={navItems} label={navLabel} />
+          <SidebarNav navKey={navKey} label={navLabel} />
         </aside>
 
         <main id="main-content" className="min-w-0 flex-1">
