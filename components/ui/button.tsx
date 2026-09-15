@@ -24,6 +24,21 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
 }
 
+/** Shared classes so links styled as buttons stay identical to real buttons. */
+export function buttonClassName({
+  variant = "primary",
+  size = "md",
+  className,
+}: Pick<ButtonProps, "variant" | "size" | "className"> = {}): string {
+  return cn(
+    "inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors",
+    "disabled:cursor-not-allowed disabled:opacity-50",
+    VARIANT_CLASSES[variant ?? "primary"],
+    SIZE_CLASSES[size ?? "md"],
+    className,
+  );
+}
+
 export function Button({
   variant = "primary",
   size = "md",
@@ -34,13 +49,7 @@ export function Button({
   return (
     <button
       type={type}
-      className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        VARIANT_CLASSES[variant],
-        SIZE_CLASSES[size],
-        className,
-      )}
+      className={buttonClassName({ variant, size, className })}
       {...props}
     />
   );
