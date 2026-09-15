@@ -87,6 +87,8 @@
 
 html {
   color-scheme: light dark;
+  /* Offset anchor scrolling below the sticky h-16 navbar. */
+  scroll-padding-top: 4.5rem;
 }
 
 body {
@@ -117,4 +119,45 @@ body {
     linear-gradient(to right, var(--line) 1px, transparent 1px),
     linear-gradient(to bottom, var(--line) 1px, transparent 1px);
   background-size: 28px 28px;
+}
+
+/* Landing page illustration motion. Disabled via prefers-reduced-motion above. */
+@keyframes lab-drip {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  95% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes lab-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.lab-drip {
+  animation: lab-drip 2s ease-in-out infinite;
+}
+
+.lab-float {
+  animation: lab-float 4s ease-in-out infinite;
+}
+
+.lab-float-slow {
+  animation: lab-float 5s ease-in-out 0.5s infinite;
 }

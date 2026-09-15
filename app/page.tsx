@@ -1,8 +1,15 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { dashboardPathForRole } from "@/application/auth/access";
 import { getCurrentProfile } from "@/application/auth/dal";
 import { Alert } from "@/components/ui/alert";
+import { Navbar } from "@/components/landing/navbar";
+import { Hero } from "@/components/landing/hero";
+import { ValueStrip } from "@/components/landing/value-strip";
+import { HowItWorks } from "@/components/landing/how-it-works";
+import { ExperimentCategories } from "@/components/landing/experiment-categories";
+import { FeatureGrid } from "@/components/landing/feature-grid";
+import { LandingCta } from "@/components/landing/cta";
+import { LandingFooter } from "@/components/landing/footer";
 import { isSupabaseConfigured } from "@/lib/env";
 
 export default async function HomePage() {
@@ -15,48 +22,34 @@ export default async function HomePage() {
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center gap-8 px-6 py-16">
-      <div className="flex flex-col gap-4">
-        <p className="text-sm font-medium uppercase tracking-wide text-primary">
-          Physical Chemistry Practical I
-        </p>
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-          Virtual Chemistry Laboratory
-        </h1>
-        <p className="max-w-2xl text-base text-muted">
-          Perform the practicals on screen: prepare solutions, read the burette, judge the
-          endpoint, repeat trials until they agree, calculate your results and submit a report
-          for assessment.
-        </p>
-      </div>
-
-      {configured ? (
-        <div className="flex flex-wrap gap-3">
-          <Link
-            href="/login"
-            className="inline-flex h-11 items-center justify-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground"
-          >
-            Sign in
-          </Link>
-          <Link
-            href="/register"
-            className="inline-flex h-11 items-center justify-center rounded-md border border-line-strong bg-surface px-5 text-sm font-medium"
-          >
-            Create an account
-          </Link>
-        </div>
-      ) : (
-        <Alert tone="warning" title="Supabase is not configured yet">
-          <p>
-            Copy <code className="font-mono">.env.example</code> to{" "}
-            <code className="font-mono">.env.local</code> and set{" "}
-            <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
-            <code className="font-mono">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>, then apply the
-            migrations in <code className="font-mono">supabase/migrations</code>. Sign-in is
-            disabled until then.
-          </p>
-        </Alert>
-      )}
-    </main>
+    <div className="flex min-h-full flex-col">
+      <Navbar />
+      <main className="flex flex-1 flex-col">
+        {!configured && (
+          <div className="border-b border-line bg-surface">
+            <div className="mx-auto max-w-6xl px-4 py-4 sm:px-6">
+              <Alert tone="warning" title="Supabase is not configured yet">
+                <p>
+                  Copy <code className="font-mono">.env.example</code> to{" "}
+                  <code className="font-mono">.env.local</code> and set{" "}
+                  <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
+                  <code className="font-mono">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>, then
+                  apply the migrations in{" "}
+                  <code className="font-mono">supabase/migrations</code>. Sign-in is
+                  disabled until then.
+                </p>
+              </Alert>
+            </div>
+          </div>
+        )}
+        <Hero />
+        <ValueStrip />
+        <HowItWorks />
+        <ExperimentCategories />
+        <FeatureGrid />
+        <LandingCta />
+      </main>
+      <LandingFooter />
+    </div>
   );
 }
