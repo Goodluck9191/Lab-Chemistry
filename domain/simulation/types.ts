@@ -1,5 +1,6 @@
 import type { ExperimentType } from "../experiments/types";
 import type { AttemptSecrets } from "./secrets";
+import type { TitrationPublicState } from "./titration/engine";
 
 /**
  * DOMAIN CONTRACTS ONLY. Stage 1 defines the shape of a running experiment but
@@ -25,6 +26,12 @@ export interface SimulationState {
   calculations: CalculationResult[];
   safetyEvents: SafetyEvent[];
   score: ScoreState;
+  /**
+   * Namespaced titration-engine session (Phase 3). Optional so pre-titration
+   * snapshots stay valid; when present it is the resume source of truth for
+   * titration experiments, alongside the projected trials/measurements below.
+   */
+  titration?: TitrationPublicState;
 }
 
 export interface SelectedApparatus {

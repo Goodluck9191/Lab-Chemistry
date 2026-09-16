@@ -3,7 +3,9 @@ import { requireStudent } from "@/application/auth/dal";
 import { getExperimentBriefing } from "@/infrastructure/supabase/repositories/experiments";
 import { startOrResumeAttempt } from "@/infrastructure/supabase/repositories/attempts";
 import { createServerSupabaseClient } from "@/infrastructure/supabase/server";
+import { titrationConfigForExperiment } from "@/domain/experiments/catalog/titration-registry";
 import { experimentIdSchema } from "./schemas";
+import { initialiseTitrationAttempt } from "./apply-simulation-action";
 
 export class ExperimentNotFoundError extends Error {
   constructor(experimentId: string) {
@@ -22,10 +24,10 @@ export interface StartAttemptResult {
 /**
  * Use case: start (or resume) an attempt at an experiment.
  *
- * Stage 1 deliberately stops here. Generating the hidden per-attempt parameters,
- * initialising the simulation and creating `attempt_secrets` belongs to the
- * simulation stage; the database and the domain contracts for that already
- * exist, so the shape will not change.
+ * Phase 3: fresh titration attempts also get their hidden reality (seed +
+ * `attempt_secrets`) and an initialised engine snapshot. Resumed attempts are
+ * untouched — their secrets and snapshot already exist (or are lazily
+ * initialised on first action for pre-Phase-3 attempts).
  */
 export async function startAttempt(rawInput: { experimentId: string }): Promise<StartAttemptResult> {
   const { experimentId } = { experimentId: experimentIdSchema.parse(rawInput.experimentId) };
@@ -45,6 +47,13 @@ export async function startAttempt(rawInput: { experimentId: string }): Promise<
   // `user` is intentionally part of the check above: an attempt is only ever
   // created for the authenticated student, never for an id supplied by a client.
   void user;
+
+  if (!resumed) {
+    const titrationConfig = titrationConfigForExperiment(experimentId);
+    if (titrationConfig) {
+      await initialiseTitrationAttempt(attempt.id, titrationConfig);
+    }
+  }
 
   return { attemptId: attempt.id, experimentId, resumed };
 }

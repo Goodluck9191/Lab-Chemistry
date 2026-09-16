@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { titrationPublicStateSchema } from "./titration/schema";
 
 /**
  * Runtime validation for persisted simulation state. `attempt_state.snapshot`
@@ -122,4 +123,5 @@ export const simulationStateSchema = z.object({
     possible: z.number(),
     events: z.array(scoreEventSchema),
   }),
+  titration: titrationPublicStateSchema.optional(),
 });

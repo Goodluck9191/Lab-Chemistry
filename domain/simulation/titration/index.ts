@@ -5,3 +5,7 @@ export * from "./endpoint";
 export * from "./trials";
 export * from "./hidden";
 export * from "./engine";
+export * from "./protocol";
+export * from "./schema";
+export * from "./persistence";
+export * from "./snapshot";
