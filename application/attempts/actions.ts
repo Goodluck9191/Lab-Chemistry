@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ExperimentNotFoundError, startAttempt } from "./start-attempt";
+import { applyTitrationAction, type TitrationActionResult } from "./apply-simulation-action";
 import { experimentIdSchema } from "./schemas";
 import type { StartAttemptFormState } from "./types";
 
@@ -36,4 +37,17 @@ export async function startAttemptAction(
   revalidatePath("/student/dashboard");
   revalidatePath("/student/experiments");
   redirect(`/lab/${parsed.data}/attempt/${attemptId}`);
+}
+
+/**
+ * Autosave transport for the future laboratory UI: accepts one protocol
+ * envelope, applies it through the full persistence unit, and returns the new
+ * revision plus the safe public projection.
+ *
+ * Errors are thrown, not swallowed: the caller distinguishes a revision
+ * conflict (refetch and retry) from an authorisation failure by the error
+ * name (`RevisionConflictError` vs redirect to login/unauthorized).
+ */
+export async function applyTitrationActionAction(input: unknown): Promise<TitrationActionResult> {
+  return applyTitrationAction(input);
 }

@@ -4,6 +4,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ATTEMPT_STATUSES, type AttemptSummary, type ExperimentAttempt } from "@/domain/attempts";
 import { createInitialSimulationState, simulationStateSchema } from "@/domain/simulation";
 import type { SimulationState } from "@/domain/simulation/types";
+import type { AttemptSecrets } from "@/domain/simulation/secrets";
+import type {
+  CalculationRow,
+  MeasurementRow,
+  ObservationRow,
+  TrialRow,
+} from "@/domain/simulation/titration/persistence";
 
 export const ATTEMPT_COLUMNS =
   "id, experiment_id, student_id, status, config_version, started_at, last_activity_at, " +
@@ -170,4 +177,265 @@ export async function getAttemptWithState(
     : createInitialSimulationState();
 
   return { attempt, state };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: secrets, revisions, row sync
+// ---------------------------------------------------------------------------
+
+const attemptSecretsRowSchema = z.object({
+  attempt_id: z.string().uuid(),
+  seed: z.string().min(1),
+  true_values: z.record(z.string(), z.number()),
+  expected_endpoint: z.record(z.string(), z.union([z.number(), z.string()])),
+  rubric_weights: z.record(z.string(), z.number()),
+});
+
+function mapSecretsRow(row: z.infer<typeof attemptSecretsRowSchema>): AttemptSecrets {
+  return {
+    seed: row.seed,
+    trueValues: { ...row.true_values },
+    expectedEndpoint: { ...row.expected_endpoint },
+    rubricWeights: { ...row.rubric_weights },
+  };
+}
+
+/**
+ * Reads hidden parameters with a service-role client. `attempt_secrets` has
+ * zero RLS policies, so this is the ONLY way to read it — never call it with
+ * a user-scoped client and never return its result to the browser.
+ */
+export async function getAttemptSecretsAdmin(
+  adminClient: SupabaseClient,
+  attemptId: string,
+): Promise<AttemptSecrets | null> {
+  const { data, error } = await adminClient
+    .from("attempt_secrets")
+    .select("attempt_id, seed, true_values, expected_endpoint, rubric_weights")
+    .eq("attempt_id", attemptId)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load attempt secrets: ${error.message}`);
+  if (!data) return null;
+  return mapSecretsRow(attemptSecretsRowSchema.parse(data));
+}
+
+/** Writes hidden parameters (insert or replace) with a service-role client. */
+export async function saveAttemptSecretsAdmin(
+  adminClient: SupabaseClient,
+  attemptId: string,
+  secrets: AttemptSecrets,
+): Promise<void> {
+  const { error } = await adminClient.from("attempt_secrets").upsert(
+    {
+      attempt_id: attemptId,
+      seed: secrets.seed,
+      true_values: secrets.trueValues,
+      expected_endpoint: secrets.expectedEndpoint,
+      rubric_weights: secrets.rubricWeights,
+    },
+    { onConflict: "attempt_id" },
+  );
+
+  if (error) throw new Error(`Failed to save attempt secrets: ${error.message}`);
+}
+
+export class RevisionConflictError extends Error {
+  readonly attemptId: string;
+  readonly baseRevision: number;
+  constructor(attemptId: string, baseRevision: number) {
+    super(
+      `Attempt ${attemptId} changed since revision ${baseRevision}: refetch and retry the action`,
+    );
+    this.name = "RevisionConflictError";
+    this.attemptId = attemptId;
+    this.baseRevision = baseRevision;
+  }
+}
+
+/** Current autosave revision of an attempt (0 when no state row exists yet). */
+export async function getAttemptRevision(
+  client: SupabaseClient,
+  attemptId: string,
+): Promise<number> {
+  const { data, error } = await client
+    .from("attempt_state")
+    .select("revision")
+    .eq("attempt_id", attemptId)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load attempt revision: ${error.message}`);
+  if (!data) return 0;
+  return z.object({ revision: z.number().int().min(0) }).parse(data).revision;
+}
+
+export async function getAttemptWithStateAndRevision(
+  client: SupabaseClient,
+  attemptId: string,
+): Promise<{ attempt: ExperimentAttempt; state: SimulationState; revision: number } | null> {
+  const result = await getAttemptWithState(client, attemptId);
+  if (!result) return null;
+  const revision = await getAttemptRevision(client, attemptId);
+  return { ...result, revision };
+}
+
+/**
+ * Autosave write with optimistic concurrency: the snapshot is stored only if
+ * the row is still at `baseRevision`, then revision becomes baseRevision + 1.
+ * A stale client gets `RevisionConflictError` and must refetch (resume) and
+ * re-issue its action — its data is never silently overwritten.
+ */
+export async function saveSnapshotConditional(
+  client: SupabaseClient,
+  attemptId: string,
+  baseRevision: number,
+  snapshot: SimulationState,
+): Promise<number> {
+  const parsed = simulationStateSchema.parse(snapshot);
+  const nextRevision = baseRevision + 1;
+
+  const { data, error } = await client
+    .from("attempt_state")
+    .update({ revision: nextRevision, snapshot: parsed })
+    .eq("attempt_id", attemptId)
+    .eq("revision", baseRevision)
+    .select("revision");
+
+  if (error) throw new Error(`Failed to save attempt state: ${error.message}`);
+  if (!data || data.length === 0) {
+    throw new RevisionConflictError(attemptId, baseRevision);
+  }
+  return nextRevision;
+}
+
+/** Upserts trial projection rows (insert or replace by attempt + number). */
+export async function syncTrialRows(
+  client: SupabaseClient,
+  attemptId: string,
+  rows: TrialRow[],
+): Promise<Map<number, string>> {
+  const idsByNumber = new Map<number, string>();
+  if (rows.length === 0) return idsByNumber;
+
+  const { error } = await client.from("experiment_trials").upsert(
+    rows.map((row) => ({
+      attempt_id: attemptId,
+      trial_number: row.trialNumber,
+      status: row.status,
+      initial_reading: row.initialReading,
+      final_reading: row.finalReading,
+      titre_volume: row.titreVolume,
+      endpoint_observed: row.endpointObserved,
+      rejection_reason: row.rejectionReason,
+    })),
+    { onConflict: "attempt_id,trial_number" },
+  );
+
+  if (error) throw new Error(`Failed to sync trial rows: ${error.message}`);
+
+  const { data, error: selectError } = await client
+    .from("experiment_trials")
+    .select("id, trial_number")
+    .eq("attempt_id", attemptId);
+
+  if (selectError) throw new Error(`Failed to load trial ids: ${selectError.message}`);
+  for (const row of z.array(z.object({ id: z.string(), trial_number: z.number() })).parse(data ?? [])) {
+    idsByNumber.set(row.trial_number, row.id);
+  }
+  return idsByNumber;
+}
+
+/** Labels already stored, so autosave retries never duplicate history rows. */
+export async function listMeasurementLabels(
+  client: SupabaseClient,
+  attemptId: string,
+): Promise<Set<string>> {
+  const { data, error } = await client
+    .from("measurements")
+    .select("label")
+    .eq("attempt_id", attemptId);
+
+  if (error) throw new Error(`Failed to list measurements: ${error.message}`);
+  return new Set(
+    z.array(z.object({ label: z.string() })).parse(data ?? []).map((row) => row.label),
+  );
+}
+
+/**
+ * Appends only measurement rows whose deterministic label is not stored yet.
+ * Measurements are append-only by schema (no UPDATE grant), so idempotency
+ * comes from label comparison, not from overwriting.
+ */
+export async function appendMeasurementRows(
+  client: SupabaseClient,
+  attemptId: string,
+  trialIdsByNumber: Map<number, string>,
+  rows: MeasurementRow[],
+): Promise<number> {
+  const existing = await listMeasurementLabels(client, attemptId);
+  const fresh = rows.filter((row) => !existing.has(row.label));
+  if (fresh.length === 0) return 0;
+
+  const { error } = await client.from("measurements").insert(
+    fresh.map((row) => ({
+      attempt_id: attemptId,
+      trial_id: row.trialRowNumber === null ? null : (trialIdsByNumber.get(row.trialRowNumber) ?? null),
+      kind: row.kind,
+      label: row.label,
+      value: row.value,
+      unit: row.unit,
+    })),
+  );
+
+  if (error) throw new Error(`Failed to append measurements: ${error.message}`);
+  return fresh.length;
+}
+
+/** Upserts endpoint/indicator observations by (attempt, step, field). */
+export async function syncObservationRows(
+  client: SupabaseClient,
+  attemptId: string,
+  trialIdsByNumber: Map<number, string>,
+  rows: Array<ObservationRow & { trialRowNumber: number | null }>,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const { error } = await client.from("observations").upsert(
+    rows.map((row) => ({
+      attempt_id: attemptId,
+      trial_id:
+        row.trialRowNumber === null ? null : (trialIdsByNumber.get(row.trialRowNumber) ?? null),
+      step_key: row.stepKey,
+      field_key: row.fieldKey,
+      text_value: row.textValue,
+      choice_value: row.choiceValue,
+    })),
+    { onConflict: "attempt_id,step_key,field_key" },
+  );
+
+  if (error) throw new Error(`Failed to sync observations: ${error.message}`);
+}
+
+/**
+ * Upserts the student's reported values. Only student-controlled columns are
+ * written: the answer key (`expected_value`, `tolerance`, `is_correct`) stays
+ * null until server-side grading, which writes it through a privileged path.
+ */
+export async function syncCalculationRows(
+  client: SupabaseClient,
+  attemptId: string,
+  rows: CalculationRow[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const { error } = await client.from("calculation_submissions").upsert(
+    rows.map((row) => ({
+      attempt_id: attemptId,
+      question_key: row.questionKey,
+      student_value: row.studentValue,
+      student_unit: row.studentUnit,
+      attempt_number: row.attemptNumber,
+    })),
+    { onConflict: "attempt_id,question_key" },
+  );
+
+  if (error) throw new Error(`Failed to sync calculations: ${error.message}`);
 }

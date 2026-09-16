@@ -449,11 +449,14 @@ export function reportMolarity(
   trial.reportedMolarityM = roundTo(studentMolarityM, 6);
   stage.reportedMolaritiesM.push(roundTo(studentMolarityM, 6));
   if (!correct) {
+    // Never include the expected value: this detail persists into the public
+    // snapshot, which the student can read. Correctness is recomputed at
+    // grade time from server-side hidden state.
     recordError(session, {
       code: "reading_error",
       trialNumber,
       stageKey,
-      detail: `reported ${studentMolarityM} M vs expected ${expected.toFixed(6)} M`,
+      detail: `reported molarity ${studentMolarityM} M outside the accepted tolerance`,
       severe: false,
     });
   }
