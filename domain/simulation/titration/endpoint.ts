@@ -14,6 +14,30 @@ import type { IndicatorConfig } from "./config";
 
 export type FlaskColour = "colourless" | "faint_pink" | "pink" | "deep_pink";
 
+/** Ordered ladder, pale to intense. UI only ever renders a member of this list. */
+export const FLASK_COLOURS = [
+  "colourless",
+  "faint_pink",
+  "pink",
+  "deep_pink",
+] as const satisfies readonly FlaskColour[];
+
+/**
+ * Map a colour name taken from a *configuration* (indicator acid/base colour)
+ * onto the observation ladder. Returns null for a name the engine cannot show,
+ * so an unrecognised configuration colour never silently becomes a fake state.
+ * This keeps the indicator-to-flask mapping in the domain instead of hardcoding
+ * "colourless" inside a React component.
+ */
+export function flaskColourFromConfigName(name: string): FlaskColour | null {
+  const normalised = name.trim().toLowerCase().replace(/\s+/g, "_");
+  if (normalised === "colourless" || normalised === "colorless") return "colourless";
+  if (normalised === "faint_pink" || normalised === "pale_pink") return "faint_pink";
+  if (normalised === "pink") return "pink";
+  if (normalised === "deep_pink" || normalised === "magenta") return "deep_pink";
+  return null;
+}
+
 export interface EndpointTruth {
   /** Hidden stoichiometric volume in mL. */
   readonly equivalenceMl: number;

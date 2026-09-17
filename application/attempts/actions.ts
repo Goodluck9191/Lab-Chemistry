@@ -4,7 +4,19 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ExperimentNotFoundError, startAttempt } from "./start-attempt";
 import { applyTitrationAction, type TitrationActionResult } from "./apply-simulation-action";
-import { experimentIdSchema } from "./schemas";
+import { getLabState, type LabStateView } from "./lab-state";
+import {
+  saveReportDraft,
+  submitAttempt,
+  type SaveReportDraftResult,
+  type SubmitAttemptResult,
+} from "./submit-attempt";
+import {
+  isControlFlowError,
+  runLabAction,
+  type LabActionOutcome,
+} from "./lab-transport";
+import { attemptIdSchema, experimentIdSchema } from "./schemas";
 import type { StartAttemptFormState } from "./types";
 
 /**
@@ -50,4 +62,89 @@ export async function startAttemptAction(
  */
 export async function applyTitrationActionAction(input: unknown): Promise<TitrationActionResult> {
   return applyTitrationAction(input);
+}
+
+/** Result of the laboratory read path: resumable state, or why it is unavailable. */
+export type LabStateOutcome =
+  | { status: "ok"; state: LabStateView }
+  | { status: "error"; code: string; message: string };
+
+/**
+ * Laboratory read path. Used when the page resumes an attempt and whenever the
+ * action controller has to reconcile after a revision conflict, so the browser
+ * always has ONE way to obtain authoritative state.
+ */
+export async function getLabStateAction(rawAttemptId: unknown): Promise<LabStateOutcome> {
+  try {
+    const attemptId = attemptIdSchema.parse(rawAttemptId);
+    return { status: "ok", state: await getLabState(attemptId) };
+  } catch (error) {
+    // redirect()/notFound() work by throwing: never convert those into data.
+    if (isControlFlowError(error)) throw error;
+    return {
+      status: "error",
+      code: "lab_state_unavailable",
+      message: "The laboratory could not be loaded. Reload the page to try again.",
+    };
+  }
+}
+
+/**
+ * Laboratory write path. Wraps the Phase 3 autosave unit in a discriminated
+ * result so the UI can distinguish a stale revision from a real failure and
+ * reconcile instead of overwriting.
+ */
+export async function submitLabActionAction(input: unknown): Promise<LabActionOutcome> {
+  const attemptId =
+    typeof input === "object" && input !== null && "attemptId" in input
+      ? String((input as { attemptId: unknown }).attemptId)
+      : "";
+
+  return runLabAction(
+    {
+      apply: applyTitrationActionAction,
+      reload: async (id) => {
+        const state = await getLabState(id);
+        return { revision: state.revision, publicState: state.publicState };
+      },
+    },
+    { attemptId },
+    input,
+  );
+}
+
+/**
+ * Report draft write path. Validation problems come back as data (the student
+ * can fix them); unexpected failures come back as a generic error rather than
+ * a framework digest the client cannot read.
+ */
+export async function saveReportDraftAction(
+  rawAttemptId: unknown,
+  rawSections: unknown,
+): Promise<SaveReportDraftResult> {
+  try {
+    return await saveReportDraft(String(rawAttemptId), rawSections);
+  } catch (error) {
+    if (isControlFlowError(error)) throw error;
+    return {
+      status: "error",
+      message: "The report draft could not be saved. Check your connection and try again.",
+    };
+  }
+}
+
+/**
+ * Attempt submission path. A blocked submission is DATA (the checklist tells
+ * the student what is missing), not an error: the panel renders the blockers.
+ */
+export async function submitAttemptAction(rawAttemptId: unknown): Promise<SubmitAttemptResult> {
+  try {
+    return await submitAttempt(String(rawAttemptId));
+  } catch (error) {
+    if (isControlFlowError(error)) throw error;
+    return {
+      status: "error",
+      message: "The attempt could not be submitted. Check your connection and try again.",
+    };
+  }
 }

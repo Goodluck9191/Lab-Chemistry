@@ -439,3 +439,153 @@ export async function syncCalculationRows(
 
   if (error) throw new Error(`Failed to sync calculations: ${error.message}`);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5: report draft + submission
+//
+// The `reports` row is the student's write-up: five text sections plus a
+// frozen copy of the PUBLIC readings used in the submitted report. Only
+// student-controlled columns are ever written here; the RLS grants in 0006
+// already limit clients to exactly these columns, and `readings_snapshot`
+// carries the public projection (never hidden parameters).
+// ---------------------------------------------------------------------------
+
+const reportRowSchema = z.object({
+  id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  status: z.enum(["draft", "submitted", "reviewed"]),
+  aim: z.string(),
+  procedure: z.string(),
+  results_summary: z.string(),
+  conclusion: z.string(),
+  safety_notes: z.string(),
+  readings_snapshot: z.record(z.string(), z.unknown()),
+  submitted_at: z.string().nullable(),
+});
+
+export interface ReportSections {
+  aim: string;
+  procedure: string;
+  resultsSummary: string;
+  conclusion: string;
+  safetyNotes: string;
+}
+
+export interface AttemptReport extends ReportSections {
+  id: string;
+  attemptId: string;
+  status: "draft" | "submitted" | "reviewed";
+  /** Frozen public readings at submit time. Never sent to the browser. */
+  readingsSnapshot: Record<string, unknown>;
+  submittedAt: string | null;
+}
+
+function mapReportRow(row: z.infer<typeof reportRowSchema>): AttemptReport {
+  return {
+    id: row.id,
+    attemptId: row.attempt_id,
+    status: row.status,
+    aim: row.aim,
+    procedure: row.procedure,
+    resultsSummary: row.results_summary,
+    conclusion: row.conclusion,
+    safetyNotes: row.safety_notes,
+    readingsSnapshot: { ...row.readings_snapshot },
+    submittedAt: row.submitted_at,
+  };
+}
+
+/** The student's report row, if one exists. RLS limits this to readable attempts. */
+export async function getReportForAttempt(
+  client: SupabaseClient,
+  attemptId: string,
+): Promise<AttemptReport | null> {
+  const { data, error } = await client
+    .from("reports")
+    .select(
+      "id, attempt_id, status, aim, procedure, results_summary, conclusion, " +
+        "safety_notes, readings_snapshot, submitted_at",
+    )
+    .eq("attempt_id", attemptId)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load report for attempt ${attemptId}: ${error.message}`);
+  if (!data) return null;
+  return mapReportRow(reportRowSchema.parse(data));
+}
+
+/**
+ * Saves the student's write-up as a draft. Only while the attempt is writable:
+ * the RLS insert/update policies refuse drafts on a submitted attempt.
+ */
+export async function upsertReportDraft(
+  client: SupabaseClient,
+  attemptId: string,
+  sections: ReportSections,
+): Promise<void> {
+  const { error } = await client.from("reports").upsert(
+    {
+      attempt_id: attemptId,
+      status: "draft",
+      aim: sections.aim,
+      procedure: sections.procedure,
+      results_summary: sections.resultsSummary,
+      conclusion: sections.conclusion,
+      safety_notes: sections.safetyNotes,
+    },
+    { onConflict: "attempt_id" },
+  );
+
+  if (error) throw new Error(`Failed to save report draft: ${error.message}`);
+}
+
+/**
+ * Freezes the report: submitted status, the student's final sections and a
+ * frozen copy of the public readings. Must run BEFORE the attempt itself is
+ * marked submitted, because afterwards the RLS write policies no longer match.
+ */
+export async function submitReportForAttempt(
+  client: SupabaseClient,
+  attemptId: string,
+  sections: ReportSections,
+  readingsSnapshot: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await client.from("reports").upsert(
+    {
+      attempt_id: attemptId,
+      status: "submitted",
+      aim: sections.aim,
+      procedure: sections.procedure,
+      results_summary: sections.resultsSummary,
+      conclusion: sections.conclusion,
+      safety_notes: sections.safetyNotes,
+      readings_snapshot: readingsSnapshot,
+      submitted_at: new Date().toISOString(),
+    },
+    { onConflict: "attempt_id" },
+  );
+
+  if (error) throw new Error(`Failed to submit report: ${error.message}`);
+}
+
+/**
+ * The single permitted forward transition for a student: in_progress (or a
+ * returned rework) -> submitted. The RLS update policy enforces the same
+ * transition, so a crafted request cannot jump anywhere else; the row parse
+ * confirms what was actually written.
+ */
+export async function markAttemptSubmitted(
+  client: SupabaseClient,
+  attemptId: string,
+): Promise<ExperimentAttempt> {
+  const now = new Date().toISOString();
+  const { data, error } = await client
+    .from("experiment_attempts")
+    .update({ status: "submitted", submitted_at: now, last_activity_at: now })
+    .eq("id", attemptId)
+    .select(ATTEMPT_COLUMNS)
+    .single();
+
+  if (error) throw new Error(`Failed to submit attempt ${attemptId}: ${error.message}`);
+  return mapAttemptRow(attemptRowSchema.parse(data));
+}

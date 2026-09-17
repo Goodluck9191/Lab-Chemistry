@@ -1,0 +1,22 @@
+
+> labchemistry@0.1.0 dev
+> next dev -p 3000
+
+▲ Next.js 16.3.5 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.56.1:3000
+- Environments: .env.local
+✓ Ready in 539ms
+✓ Running next.config.ts took 41ms
+
+ GET /lab-preview 200 in 774ms (next.js: 183ms, proxy.ts: 232ms, application-code: 360ms)
+ GET /lab-preview 200 in 157ms (next.js: 17ms, proxy.ts: 26ms, application-code: 114ms)
+ GET /lab-preview 200 in 89ms (next.js: 6ms, proxy.ts: 4ms, application-code: 80ms)
+ GET /lab-preview 200 in 922ms (next.js: 7ms, proxy.ts: 819ms, application-code: 95ms)
+ POST /lab-preview 200 in 1340ms (next.js: 27ms, proxy.ts: 1258ms, application-code: 55ms)
+  └─ ƒ loadPreviewScenario("burette-filled") in 3ms components/lab/preview/preview-actions.ts
+ POST /lab-preview 200 in 426ms (next.js: 21ms, proxy.ts: 371ms, application-code: 35ms)
+  └─ ƒ loadPreviewScenario("mid-trial") in 3ms components/lab/preview/preview-actions.ts
+ POST /lab-preview 200 in 612ms (next.js: 14ms, proxy.ts: 566ms, application-code: 32ms)
+  └─ ƒ replayPreviewLabAction({"envelope":{"action":"[Object]","attemptId":"00000000-0000-4000-8000-000000000002","baseRevision":1,"...":"1 item not stringified"},"history":[],"scenarioId":"mid-trial"}) in 6ms components/lab/preview/preview-actions.ts
+[?25h

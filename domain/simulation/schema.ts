@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { titrationPublicStateSchema } from "./titration/schema";
+import { titrationSessionStateSchema } from "./titration/schema";
 
 /**
  * Runtime validation for persisted simulation state. `attempt_state.snapshot`
@@ -123,5 +123,9 @@ export const simulationStateSchema = z.object({
     possible: z.number(),
     events: z.array(scoreEventSchema),
   }),
-  titration: titrationPublicStateSchema.optional(),
+  // Stored/reloaded shape: additive fields carry defaults so a snapshot written
+  // by an earlier phase still resumes. The stricter client-facing projection is
+  // `titrationPublicStateSchema`, which additionally requires the derived
+  // concordance summary.
+  titration: titrationSessionStateSchema.optional(),
 });
