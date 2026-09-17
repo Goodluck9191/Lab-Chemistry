@@ -10,6 +10,7 @@ import { ControlReason, describedBy } from "./control-reason";
 import {
   analytePortionAvailability,
   buretteSetupAvailability,
+  CONTROL_REASONS,
   indicatorAvailability,
 } from "./control-availability";
 import { ReadingInput, readingIsUsable } from "./reading-input";
@@ -62,9 +63,13 @@ export function BuretteSetupSection({ initialState }: { initialState: LabStateVi
   if (!stage) return null;
 
   const titrantLabel = initialState.chemicalLabels[stage.titrantKey] ?? stage.titrantKey;
-  const disabled = !canWrite || pending;
+  const disabled = !canWrite || pending || stage.locked;
   const titrantSelected = selectedReagentKey === stage.titrantKey;
-  const availability = buretteSetupAvailability({ canWrite, pending });
+  // `buretteSetupAvailability` is stage-agnostic (rinsing is always the same
+  // motion), so the stage-order lock is applied here at the call site.
+  const availability = stage.locked
+    ? { available: false, reason: CONTROL_REASONS.stageLocked }
+    : buretteSetupAvailability({ canWrite, pending });
 
   return (
     <div className="rounded-md border border-line px-3 py-3">
@@ -129,14 +134,90 @@ export function BuretteSetupSection({ initialState }: { initialState: LabStateVi
   );
 }
 
-export function AnalyteSection({ initialState }: { initialState: LabStateView }) {
-  const stage = useActiveStage();
+/**
+ * Instrument status and next-step guidance (§44: what am I using, what state
+ * is it in, what can I do, what next). Purely descriptive: every line reflects
+ * UI guide state or authoritative state, never an invented measurement.
+ */
+function InstrumentGuide({ status, next }: { status: string; next: string | null }) {
+  return (
+    <div className="mt-2 rounded border border-line bg-surface-muted/40 px-2 py-1.5 text-xs">
+      <p>
+        <span className="font-medium">Status:</span> {status}
+      </p>
+      {next ? (
+        <p className="mt-0.5 text-muted">
+          <span className="font-medium text-foreground">Next:</span> {next}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function BalanceGuide({
+  balanceStep,
+  availabilityAvailable,
+}: {
+  balanceStep: "none" | "empty" | "tared" | "loaded";
+  availabilityAvailable: boolean;
+}) {
+  const status =
+    balanceStep === "none"
+      ? "Balance · weighing bottle missing"
+      : balanceStep === "empty"
+        ? "Balance · bottle on the pan · not tared"
+        : balanceStep === "tared"
+          ? "Balance · tared · reads 0.00 g until the sample is added"
+          : "Balance · sample added · read the display";
+  const next = !availabilityAvailable
+    ? null
+    : balanceStep === "none"
+      ? "Place the weighing bottle on the pan."
+      : balanceStep === "empty"
+        ? "Tare the balance to zero."
+        : balanceStep === "tared"
+          ? "Add the standard, then read the display."
+          : "Read the display and enter the mass below.";
+  return <InstrumentGuide status={status} next={next} />;
+}
+
+function PipetteGuide({
+  fillerAttached,
+  pipetteStage,
+  availabilityAvailable,
+}: {
+  fillerAttached: boolean;
+  pipetteStage: "resting" | "filled" | "delivered";
+  availabilityAvailable: boolean;
+}) {
+  const contents =
+    pipetteStage === "filled" ? "Filled" : pipetteStage === "delivered" ? "Delivered" : "Empty";
+  const next = !availabilityAvailable
+    ? null
+    : !fillerAttached
+      ? "Attach the pipette filler."
+      : pipetteStage === "resting"
+        ? "Draw the solution up to the mark."
+        : pipetteStage === "filled"
+          ? "Deliver into the conical flask."
+          : "Enter the volume you delivered and record it.";
+  return (
+    <InstrumentGuide
+      status={`Pipette · filler ${fillerAttached ? "attached" : "not attached"} · ${contents}`}
+      next={next}
+    />
+  );
+}
+
+export function AnalyteSection({ initialState }: { initialState: LabStateView }) {  const stage = useActiveStage();
   const { perform, pending, canWrite } = useLabServer();
-  const { pipetteStage, setPipetteStage } = useLabUi();
+  const { pipetteStage, setPipetteStage, fillerAttached, setFillerAttached } = useLabUi();
   const [massReading, setMassReading] = useState("");
   const [volumeReading, setVolumeReading] = useState("");
-  // UI-only workflow staging for the balance: place, tare, add, read.
-  const [balanceStep, setBalanceStep] = useState<"empty" | "tared" | "loaded">("empty");
+  // UI-only workflow staging for the balance: place, tare, add, read. The
+  // sequence guides the practical; the reading entered below is still the only
+  // number the laboratory records.
+  const [balanceStep, setBalanceStep] = useState<"none" | "empty" | "tared" | "loaded">("none");
   const uid = useId();
   const reasonId = `${uid}-analyte-reason`;
 
@@ -161,22 +242,32 @@ export function AnalyteSection({ initialState }: { initialState: LabStateView })
             {stage.portion.precision} g.
           </p>
           <ControlReason id={reasonId} reason={availability.reason} className="mt-1" />
+          <BalanceGuide balanceStep={balanceStep} availabilityAvailable={availability.available} />
           <div className="mt-2 flex flex-wrap gap-2">
-            {(["empty", "tared", "loaded"] as const).map((stepKey) => (
-              <Button
-                key={stepKey}
-                size="sm"
-                variant={balanceStep === stepKey ? "primary" : "secondary"}
-                onClick={() => setBalanceStep(stepKey)}
-                disabled={!availability.available}
-              >
-                {stepKey === "empty"
-                  ? "Place weighing bottle"
-                  : stepKey === "tared"
-                    ? "Tare the balance"
-                    : `Add ${analyteLabel}`}
-              </Button>
-            ))}
+            <Button
+              size="sm"
+              variant={balanceStep !== "none" ? "primary" : "secondary"}
+              onClick={() => setBalanceStep("empty")}
+              disabled={!availability.available || balanceStep !== "none"}
+            >
+              Place weighing bottle
+            </Button>
+            <Button
+              size="sm"
+              variant={balanceStep === "tared" || balanceStep === "loaded" ? "primary" : "secondary"}
+              onClick={() => setBalanceStep("tared")}
+              disabled={!availability.available || balanceStep !== "empty"}
+            >
+              Tare the balance
+            </Button>
+            <Button
+              size="sm"
+              variant={balanceStep === "loaded" ? "primary" : "secondary"}
+              onClick={() => setBalanceStep("loaded")}
+              disabled={!availability.available || balanceStep !== "tared"}
+            >
+              {`Add ${analyteLabel}`}
+            </Button>
           </div>
           <p className="mt-1 text-xs text-muted">
             The balance sequence is a guide for the practical; the reading you enter below is the
@@ -226,11 +317,29 @@ export function AnalyteSection({ initialState }: { initialState: LabStateView })
             filler into the conical flask. Volume known to {stage.portion.precision} mL.
           </p>
           <ControlReason id={reasonId} reason={availability.reason} className="mt-1" />
+          <PipetteGuide
+            fillerAttached={fillerAttached}
+            pipetteStage={pipetteStage}
+            availabilityAvailable={availability.available}
+          />
           <div className="mt-2 flex flex-wrap gap-2">
             <Button
               size="sm"
+              variant={fillerAttached ? "primary" : "secondary"}
+              disabled={!availability.available || fillerAttached}
+              onClick={() => setFillerAttached(true)}
+            >
+              Attach filler
+            </Button>
+            <Button
+              size="sm"
               variant={pipetteStage === "filled" ? "primary" : "secondary"}
-              disabled={!availability.available || pipetteStage === "delivered"}
+              disabled={
+                !availability.available ||
+                !fillerAttached ||
+                pipetteStage === "filled" ||
+                pipetteStage === "delivered"
+              }
               onClick={() => setPipetteStage("filled")}
             >
               Draw up solution

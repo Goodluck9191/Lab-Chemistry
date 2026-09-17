@@ -124,6 +124,26 @@ export function stageBReadySession(seed = DEFAULT_SEED): TitrationSession {
   return session;
 }
 
+/**
+ * A session where BOTH stages hold three concordant reported trials — the
+ * state a student reaches at the end of the bench work, before observations
+ * and submission. Reported constants agree, so concordance holds; whether the
+ * constants match hidden truth is irrelevant to the workflow.
+ */
+export function concordantFullSession(seed = DEFAULT_SEED): TitrationSession {
+  const session = concordantStageASession(seed);
+  const observableB = session.hidden.stages[STAGE_B].observableMl;
+  setupApparatus(session, STAGE_B, "naoh", 0);
+  pipetteAnalyte(session, STAGE_B, 25);
+  addIndicator(session, STAGE_B, 3);
+  for (let trial = 1; trial <= 3; trial += 1) {
+    prepareStageA(session, { stageKey: STAGE_B });
+    runTrial(session, { trialNumber: trial, deliveredMl: round2(observableB), stageKey: STAGE_B });
+    reportMolarity(session, STAGE_B, trial, 0.2);
+  }
+  return session;
+}
+
 export function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }

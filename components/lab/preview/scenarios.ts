@@ -296,6 +296,7 @@ export function buildPreviewState(
       revision,
       config: publicTitrationConfigView(exp02TitrationConfig),
       publicState: toPublicJSON(session),
+      report: null,
       briefing: exp02Standardisation,
     }),
     accepted,

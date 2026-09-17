@@ -33,11 +33,17 @@ import type { LabStateView } from "@/application/attempts/lab-state";
  */
 export function ActionPanel({ initialState }: { initialState: LabStateView }) {
   const stage = useActiveStage();
-  const { selectedApparatusKey, selectedReagentKey } = useLabUi();
+  const { selectedApparatusKey, selectedReagentKey, fillerAttached } = useLabUi();
 
   if (!stage) return null;
 
-  const focus = resolveFocus(stage, selectedApparatusKey, selectedReagentKey, initialState);
+  const focus = resolveFocus(
+    stage,
+    selectedApparatusKey,
+    selectedReagentKey,
+    initialState,
+    fillerAttached,
+  );
 
   const preparationIsFocused = focus !== null && focus.kind === "preparation";
 
@@ -101,6 +107,7 @@ function resolveFocus(
   selectedApparatusKey: string | null,
   selectedReagentKey: string | null,
   initialState: LabStateView,
+  fillerAttached: boolean,
 ): Focus | null {
   // A reagent selection focuses the instrument that uses it.
   if (selectedReagentKey) {
@@ -151,7 +158,9 @@ function resolveFocus(
       return {
         kind: "preparation",
         title: "Pipette the aliquot",
-        description: "Draw up the solution with the filler, then deliver into the flask.",
+        description: fillerAttached
+          ? "Filler attached. Draw up the solution with the filler, then deliver into the flask."
+          : "Attach the filler first, then draw up the solution and deliver into the flask.",
         section: <AnalyteSection initialState={initialState} />,
       };
     case "analytical_balance":
@@ -168,6 +177,34 @@ function resolveFocus(
         description: "Deliver titrant while swirling, then record the colour you observe. The titration controls below are the flask's actions.",
         section: null,
       };
+    case "beaker":
+      return {
+        kind: "preparation",
+        title: "Beaker",
+        description:
+          "Holds rinsings and intermediate solutions. It takes no measurement in this practical — prepare the sample in the section below.",
+        section: null,
+      };
+    case "volumetric_flask":
+      return {
+        kind: "preparation",
+        title: "Volumetric flask",
+        description:
+          "Made up to the mark when a standard solution is prepared by volume. This experiment standardises by weighing and pipetting, so the flask stays in reserve.",
+        section: null,
+      };
+    case "waste_container": {
+      const discarded = stage.concordance.discardedTrials.length;
+      return {
+        kind: "titration",
+        title: "Waste container",
+        description:
+          discarded === 0
+            ? "Overshot or rejected trials are discarded here. Nothing discarded yet."
+            : `Overshot or rejected trials are discarded here. ${discarded} trial${discarded === 1 ? "" : "s"} discarded so far.`,
+        section: null,
+      };
+    }
     default:
       return null;
   }

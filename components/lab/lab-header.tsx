@@ -60,16 +60,24 @@ export function LabHeader({ initialState }: { initialState: LabStateView }) {
               key={stage.key}
               type="button"
               aria-pressed={stage.key === activeStageKey}
+              disabled={stage.locked}
+              title={
+                stage.locked && stage.lockedBy
+                  ? `Complete ${stage.lockedBy} first — stages unlock in order`
+                  : undefined
+              }
               onClick={() => setActiveStageKey(stage.key)}
               className={
                 "rounded-md border px-2.5 py-1 text-xs font-medium " +
                 (stage.key === activeStageKey
                   ? "border-primary text-primary"
-                  : "border-line text-muted hover:bg-surface-muted")
+                  : "border-line text-muted hover:bg-surface-muted ") +
+                (stage.locked ? "cursor-not-allowed opacity-60" : "")
               }
             >
               Stage {String.fromCharCode(65 + stage.index)}
               {stage.complete ? " ✓" : ""}
+              {stage.locked ? " · Locked" : ""}
             </button>
           ))}
         </div>

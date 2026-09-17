@@ -213,19 +213,42 @@ export function WasteContainerSvg({
   x = 0,
   y = 0,
   label = "Waste container",
+  discardedCount = null,
 }: {
   x?: number;
   y?: number;
   label?: string;
+  /**
+   * Discarded trials across the attempt, or null when unknown. Renders a waste
+   * level proportional to the count (capped for drawing) — the count in the
+   * title is the honest signal, straight from the persisted trials.
+   */
+  discardedCount?: number | null;
 }) {
+  const level = discardedCount === null ? 0 : Math.max(0, Math.min(1, discardedCount / 6));
+  const liquidTop = 74 - level * 58;
   return (
     <g transform={`translate(${x}, ${y})`}>
       <path d="M 4 8 L 60 8 L 54 74 L 10 74 Z" fill="var(--surface-muted)" stroke="var(--foreground)" strokeWidth={1.4} />
+      {level > 0 ? (
+        <path
+          d={`M 8 ${liquidTop} L 56 ${liquidTop} L 52 70 L 12 70 Z`}
+          fill="var(--lab-liquid)"
+          stroke="var(--lab-liquid-border)"
+          strokeWidth={0.4}
+          opacity={0.75}
+          className="transition-opacity duration-300"
+        />
+      ) : null}
       <rect x={0} y={0} width={64} height={10} rx={3} fill="var(--foreground)" />
       <text x={32} y={42} textAnchor="middle" fontSize={8} fill="var(--lab-scale)" fontWeight={500}>
         waste
       </text>
-      <title>{label}</title>
+      <title>
+        {discardedCount === null || discardedCount === 0
+          ? label
+          : `${label} — ${discardedCount} discarded trial${discardedCount === 1 ? "" : "s"} so far`}
+      </title>
       <text x={32} y={90} textAnchor="middle" fontSize={9} fill="var(--lab-scale)">
         {label}
       </text>

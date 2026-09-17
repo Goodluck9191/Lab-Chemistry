@@ -5,7 +5,7 @@ import type { KeyboardEvent } from "react";
 import { Expand } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useActiveStage, useLabServer, useLabUi } from "./lab-state-provider";
+import { useActiveStage, useLabServer, useLabUi, useLabViewModel } from "./lab-state-provider";
 import { ControlReason, describedBy } from "./control-reason";
 import {
   focusModeAvailability,
@@ -54,6 +54,7 @@ const SURFACE_Y = 620;
 
 export function LabBench({ initialState }: { initialState: LabStateView }) {
   const stage = useActiveStage();
+  const model = useLabViewModel();
   const { canWrite, pending } = useLabServer();
   const {
     activeStageKey,
@@ -67,7 +68,7 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
     setSelectedApparatusKey,
     setFocusedApparatus,
     pipetteStage,
-    setPipetteStage,
+    fillerAttached,
   } = useLabUi();
   const focusReasonId = `${useId()}-bench-focus-reason`;
 
@@ -93,9 +94,10 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
   }, [canSwirl, setSelectedApparatusKey, setSwirl]);
 
   const handlePipetteClick = useCallback(() => {
+    // Selecting only: drawing solution is a guided panel step (the filler must
+    // be attached first), so a bench click never fills the pipette by itself.
     setSelectedApparatusKey("pipette");
-    setPipetteStage(pipetteStage === "resting" ? "filled" : pipetteStage);
-  }, [pipetteStage, setPipetteStage, setSelectedApparatusKey]);
+  }, [setSelectedApparatusKey]);
 
   const handleBuretteSelect = useCallback(() => {
     setSelectedApparatusKey("burette");
@@ -139,6 +141,13 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
       </div>
     );
   }
+
+  // Discarded trials across every stage: overshot solutions go to waste, so the
+  // waste level is drawn from the persisted trials, never invented.
+  const discardedTotal = model.stages.reduce(
+    (total, entry) => total + entry.concordance.discardedTrials.length,
+    0,
+  );
 
   // The open path: stopcock turned, a trial running, burette prepared. This is
   // the only condition under which flow visuals may render.
@@ -226,6 +235,7 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
               stage.portion.kind === "pipetted_volume" ? stage.portion.nominalVolumeMl : null
             }
             stage={pipetteStage}
+            fillerAttached={fillerAttached}
             selected={selectedApparatusKey === "pipette"}
             x={414}
             y={400}
@@ -233,7 +243,41 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
           />
 
           <BeakerSvg x={490} y={564} fillFraction={0} />
+          {interactive ? (
+            <g
+              role="button"
+              tabIndex={0}
+              aria-label="Beaker. Activate to bring up its guidance."
+              onClick={() => setSelectedApparatusKey("beaker")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedApparatusKey("beaker");
+                }
+              }}
+              className="cursor-pointer"
+            >
+              <rect x={486} y={560} width={58} height={78} rx={8} fill="transparent" />
+            </g>
+          ) : null}
           <VolumetricFlaskSvg x={556} y={520} />
+          {interactive ? (
+            <g
+              role="button"
+              tabIndex={0}
+              aria-label="Volumetric flask. Activate to bring up its guidance."
+              onClick={() => setSelectedApparatusKey("volumetric_flask")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedApparatusKey("volumetric_flask");
+                }
+              }}
+              className="cursor-pointer"
+            >
+              <rect x={550} y={514} width={58} height={122} rx={8} fill="transparent" />
+            </g>
+          ) : null}
 
           {/* Balance with the weighing bottle */}
           <BalanceSvg
@@ -290,7 +334,24 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
             );
           })}
 
-          <WasteContainerSvg x={916} y={546} />
+          <WasteContainerSvg x={916} y={546} discardedCount={discardedTotal} />
+          {interactive ? (
+            <g
+              role="button"
+              tabIndex={0}
+              aria-label="Waste container. Activate to bring up its guidance."
+              onClick={() => setSelectedApparatusKey("waste_container")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedApparatusKey("waste_container");
+                }
+              }}
+              className="cursor-pointer"
+            >
+              <rect x={912} y={542} width={72} height={100} rx={8} fill="transparent" />
+            </g>
+          ) : null}
         </svg>
       </div>
 

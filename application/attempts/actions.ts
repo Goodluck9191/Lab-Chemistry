@@ -6,6 +6,12 @@ import { ExperimentNotFoundError, startAttempt } from "./start-attempt";
 import { applyTitrationAction, type TitrationActionResult } from "./apply-simulation-action";
 import { getLabState, type LabStateView } from "./lab-state";
 import {
+  saveReportDraft,
+  submitAttempt,
+  type SaveReportDraftResult,
+  type SubmitAttemptResult,
+} from "./submit-attempt";
+import {
   isControlFlowError,
   runLabAction,
   type LabActionOutcome,
@@ -105,4 +111,40 @@ export async function submitLabActionAction(input: unknown): Promise<LabActionOu
     { attemptId },
     input,
   );
+}
+
+/**
+ * Report draft write path. Validation problems come back as data (the student
+ * can fix them); unexpected failures come back as a generic error rather than
+ * a framework digest the client cannot read.
+ */
+export async function saveReportDraftAction(
+  rawAttemptId: unknown,
+  rawSections: unknown,
+): Promise<SaveReportDraftResult> {
+  try {
+    return await saveReportDraft(String(rawAttemptId), rawSections);
+  } catch (error) {
+    if (isControlFlowError(error)) throw error;
+    return {
+      status: "error",
+      message: "The report draft could not be saved. Check your connection and try again.",
+    };
+  }
+}
+
+/**
+ * Attempt submission path. A blocked submission is DATA (the checklist tells
+ * the student what is missing), not an error: the panel renders the blockers.
+ */
+export async function submitAttemptAction(rawAttemptId: unknown): Promise<SubmitAttemptResult> {
+  try {
+    return await submitAttempt(String(rawAttemptId));
+  } catch (error) {
+    if (isControlFlowError(error)) throw error;
+    return {
+      status: "error",
+      message: "The attempt could not be submitted. Check your connection and try again.",
+    };
+  }
 }

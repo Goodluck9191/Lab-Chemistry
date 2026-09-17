@@ -11,7 +11,10 @@
  *
  *  - a stale client naming a stage this attempt no longer has is rejected as a
  *    protocol problem instead of throwing out of the caller;
- *  - an observation may only name a field the experiment declares.
+ *  - an observation may only name a field the experiment declares;
+ *  - a stage whose predecessors are still incomplete is LOCKED: the experiment
+ *    runs in order (Stage A standardisation before Stage B determination), so
+ *    an action naming a locked stage is refused no matter what the client shows.
  *
  * SECURITY: `expected` is deliberately dropped from a `report_molarity` result.
  * Correctness is recomputed server-side at grade time from hidden state, so the
@@ -25,6 +28,7 @@ import {
   completeTrial,
   observeEndpoint,
   pipetteAnalyte,
+  projectPublicState,
   readBurette,
   recordObservation,
   reportMolarity,
@@ -34,6 +38,7 @@ import {
   type ActionResult,
   type TitrationSession,
 } from "./engine";
+import { projectExperimentWorkflow } from "./workflow";
 
 /** The engine-facing half of an action's result. Nothing hidden may be added. */
 export interface TitrationDispatchOutcome {
@@ -84,6 +89,24 @@ export function dispatchTitrationAction(
       accepted: false,
       code: "unknown_stage",
       message: `This attempt has no stage named ${action.stageKey}`,
+      colour: null,
+      calculationCorrect: null,
+    };
+  }
+  // Stage order is an experiment property, enforced for every caller (the
+  // autosaving server action and any preview harness route through here): work
+  // on a later stage is refused while an earlier stage is still incomplete.
+  // The workflow is derived from public state only, so this check can neither
+  // leak hidden values nor go stale.
+  const workflow = projectExperimentWorkflow(session.config, projectPublicState(session));
+  const stageStatus = workflow.stages.find((stage) => stage.key === action.stageKey);
+  if (stageStatus?.locked) {
+    return {
+      accepted: false,
+      code: "stage_locked",
+      message:
+        `Stage ${stageStatus.letter} (${stageStatus.title}) is locked. ` +
+        `Complete Stage ${workflow.stages.find((s) => s.key === stageStatus.lockedByKey)?.letter ?? ""} (${stageStatus.lockedByTitle ?? "the earlier stage"}) first.`,
       colour: null,
       calculationCorrect: null,
     };

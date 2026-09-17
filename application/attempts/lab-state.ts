@@ -10,12 +10,17 @@ import {
 import type { ExperimentBriefing, ProcedureStep } from "@/domain/experiments/types";
 import { toPublicJSON, type TitrationPublicState } from "@/domain/simulation/titration/engine";
 import {
+  projectExperimentWorkflow,
+  type ExperimentWorkflowStatus,
+} from "@/domain/simulation/titration/workflow";
+import {
   publicTitrationConfigView,
   type PublicStageView,
   type PublicTitrationConfigView,
 } from "@/domain/simulation/titration/public-view";
 import { createServerSupabaseClient } from "@/infrastructure/supabase/server";
 import { getExperimentBriefing } from "@/infrastructure/supabase/repositories/experiments";
+import { getReportForAttempt } from "@/infrastructure/supabase/repositories/attempts";
 import { loadTitrationAttempt } from "./apply-simulation-action";
 import { attemptIdSchema } from "./schemas";
 
@@ -56,6 +61,21 @@ export interface LabFormulaGuidance {
   analyteMolarMassGPerMol: number | null;
 }
 
+/**
+ * The student's report write-up as the browser may see it. `readingsSnapshot`
+ * is deliberately ABSENT: the frozen copy duplicates the public projection the
+ * UI already holds, so sending it again would only bloat the payload.
+ */
+export interface LabReportView {
+  status: "draft" | "submitted" | "reviewed";
+  aim: string;
+  procedure: string;
+  resultsSummary: string;
+  conclusion: string;
+  safetyNotes: string;
+  submittedAt: string | null;
+}
+
 export interface LabStateView {
   attemptId: string;
   experimentId: string;
@@ -73,6 +93,13 @@ export interface LabStateView {
   apparatusLabels: Record<string, string>;
   config: PublicTitrationConfigView;
   publicState: TitrationPublicState;
+  /**
+   * Explicit experiment workflow (stage order, locks, checklist, submit gate),
+   * derived server-side from the public projection on every read.
+   */
+  workflow: ExperimentWorkflowStatus;
+  /** The student's report draft, if one exists. Never carries hidden values. */
+  report: LabReportView | null;
   procedure: ProcedureStep[];
   declaredObservations: DeclaredObservationField[];
   /** Declared prompts the protocol cannot grade yet (e.g. the moles step). */
@@ -175,6 +202,8 @@ export interface LabStateSources {
   config: PublicTitrationConfigView;
   /** The engine's public projection — never the session. */
   publicState: TitrationPublicState;
+  /** The student's report draft, if one exists. */
+  report: LabReportView | null;
   /** Public experiment catalog projection. */
   briefing: ExperimentBriefing;
 }
@@ -190,6 +219,14 @@ export interface LabStateSources {
  */
 export function buildLabStateView(sources: LabStateSources): LabStateView {
   const { briefing, config, publicState } = sources;
+  const declaredObservations = declaredObservationFieldsFor(sources.experimentId);
+  const workflow = projectExperimentWorkflow(
+    config,
+    publicState,
+    declaredObservations
+      .filter((field) => field.isRequired)
+      .map((field) => ({ fieldKey: field.fieldKey, prompt: field.prompt })),
+  );
   return {
     attemptId: sources.attemptId,
     experimentId: sources.experimentId,
@@ -208,6 +245,8 @@ export function buildLabStateView(sources: LabStateSources): LabStateView {
     ),
     config,
     publicState,
+    workflow,
+    report: sources.report,
     procedure: briefing.procedure,
     declaredObservations: declaredObservationFieldsFor(sources.experimentId),
     ungradedCalculations: declaredCalculationPromptsFor(sources.experimentId),
@@ -235,6 +274,8 @@ export async function getLabState(rawAttemptId: string): Promise<LabStateView> {
   const briefing = await getExperimentBriefing(supabase, loaded.experimentId);
   if (!briefing) throw new Error(`Experiment ${loaded.experimentId} was not found`);
 
+  const storedReport = await getReportForAttempt(supabase, attemptId);
+
   return buildLabStateView({
     attemptId: loaded.attemptId,
     experimentId: loaded.experimentId,
@@ -243,6 +284,17 @@ export async function getLabState(rawAttemptId: string): Promise<LabStateView> {
     revision: loaded.revision,
     config: publicTitrationConfigView(loaded.config),
     publicState: toPublicJSON(loaded.session),
+    report: storedReport
+      ? {
+          status: storedReport.status,
+          aim: storedReport.aim,
+          procedure: storedReport.procedure,
+          resultsSummary: storedReport.resultsSummary,
+          conclusion: storedReport.conclusion,
+          safetyNotes: storedReport.safetyNotes,
+          submittedAt: storedReport.submittedAt,
+        }
+      : null,
     briefing,
   });
 }

@@ -62,6 +62,13 @@ export interface LabUiContextValue {
   setSelectedApparatusKey: (key: string | null) => void;
   pipetteStage: PipetteStage;
   setPipetteStage: (stage: PipetteStage) => void;
+  /**
+   * Whether the pipette filler is attached. UI-ONLY like `pipetteStage`: it
+   * gates the guided draw/deliver steps in the panel, but the volume the
+   * server records still comes from the reading the student enters.
+   */
+  fillerAttached: boolean;
+  setFillerAttached: (attached: boolean) => void;
   /** Apparatus shown enlarged in the focus overlay, or null. UI-only. */
   focusedApparatus: string | null;
   setFocusedApparatus: (key: string | null) => void;
@@ -107,6 +114,7 @@ export function LabStateProvider({
   const [selectedReagentKey, setSelectedReagentKey] = useState<string | null>(null);
   const [selectedApparatusKey, setSelectedApparatusKey] = useState<string | null>(null);
   const [pipetteStage, setPipetteStage] = useState<PipetteStage>("resting");
+  const [fillerAttached, setFillerAttached] = useState(false);
   const [focusedApparatus, setFocusedApparatus] = useState<string | null>(null);
 
   const activeStageKey = selectedStageKey ?? derivedStageKey;
@@ -170,6 +178,8 @@ export function LabStateProvider({
     setSelectedApparatusKey: selectApparatus,
     pipetteStage,
     setPipetteStage,
+    fillerAttached,
+    setFillerAttached,
     focusedApparatus,
     setFocusedApparatus,
   };

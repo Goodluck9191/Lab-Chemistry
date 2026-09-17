@@ -3,6 +3,7 @@ import { exp02Standardisation } from "@/domain/experiments/catalog/exp-02-standa
 import { publicTitrationConfigView } from "@/domain/simulation/titration/public-view";
 import { exp02TitrationConfig } from "@/domain/experiments/catalog/exp-02-titration-config";
 import { toPublicJSON, type TitrationSession } from "@/domain/simulation/titration/engine";
+import { projectExperimentWorkflow } from "@/domain/simulation/titration/workflow";
 import { molarMassForChemical } from "@/domain/chemistry/molar-masses";
 
 /**
@@ -35,6 +36,7 @@ export function labStateViewFor(
       wash_bottle: "Wash bottle",
     },
     notices = [],
+    report = null,
   }: {
     attemptId?: string;
     experimentId?: string;
@@ -43,10 +45,18 @@ export function labStateViewFor(
     chemicalLabels?: Record<string, string>;
     apparatusLabels?: Record<string, string>;
     notices?: string[];
+    report?: LabStateView["report"];
   } = {},
 ): LabStateView {
   const config = publicTitrationConfigView(exp02TitrationConfig);
   const publicState = toPublicJSON(session);
+  const declaredObservations = exp02Standardisation.observations.map((observation) => ({
+    stepKey: observation.stepKey,
+    fieldKey: observation.fieldKey,
+    prompt: observation.prompt,
+    kind: observation.kind,
+    isRequired: observation.isRequired,
+  }));
 
   return {
     attemptId,
@@ -62,14 +72,16 @@ export function labStateViewFor(
     apparatusLabels,
     config,
     publicState,
+    workflow: projectExperimentWorkflow(
+      config,
+      publicState,
+      declaredObservations
+        .filter((field) => field.isRequired)
+        .map((field) => ({ fieldKey: field.fieldKey, prompt: field.prompt })),
+    ),
+    report: report ?? null,
     procedure: exp02Standardisation.procedure.map((step) => ({ ...step })),
-    declaredObservations: exp02Standardisation.observations.map((observation) => ({
-      stepKey: observation.stepKey,
-      fieldKey: observation.fieldKey,
-      prompt: observation.prompt,
-      kind: observation.kind,
-      isRequired: observation.isRequired,
-    })),
+    declaredObservations,
     ungradedCalculations: exp02Standardisation.calculations.map((calculation) => ({
       key: calculation.key,
       prompt: calculation.prompt,

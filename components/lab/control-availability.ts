@@ -38,6 +38,7 @@ export interface LabControlFlags {
 export const CONTROL_REASONS = {
   closed: "This attempt has been submitted, so the bench is read-only.",
   saving: "Another action is still being saved. Wait for the laboratory to confirm it.",
+  stageLocked: "Complete the earlier stage first — stages unlock in order.",
 
   analyteNeedsBurette: "Set up the burette before measuring the sample.",
   indicatorNeedsAnalyte: "Prepare the sample in the flask before adding the indicator.",
@@ -80,6 +81,16 @@ function gate(flags: LabControlFlags, rule: () => ControlAvailability): ControlA
   return blockingGate(flags) ?? rule();
 }
 
+/**
+ * The stage-order gate: a locked stage mirrors the server-side `stage_locked`
+ * rule, so every control on it explains the lock with the same reason instead
+ * of sending an action the server must refuse.
+ */
+function stageLock(stage: StageView): ControlAvailability | null {
+  if (!stage.locked) return null;
+  return unavailable(CONTROL_REASONS.stageLocked);
+}
+
 /** Selecting a reagent or apparatus is a UI aid; it only needs a writable bench. */
 export function selectionAvailability(flags: LabControlFlags): ControlAvailability {
   return gate(flags, () => AVAILABLE);
@@ -99,7 +110,7 @@ export function analytePortionAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () =>
-    stage.burette.setup ? AVAILABLE : unavailable(CONTROL_REASONS.analyteNeedsBurette),
+    stageLock(stage) ?? (stage.burette.setup ? AVAILABLE : unavailable(CONTROL_REASONS.analyteNeedsBurette)),
   );
 }
 
@@ -109,6 +120,8 @@ export function indicatorAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
     if (stage.phase === "analyte_ready") return AVAILABLE;
     return unavailable(
       stage.phase === "indicator_added"
@@ -124,6 +137,8 @@ export function startTrialAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
     if (stage.openTrial) return unavailable(CONTROL_REASONS.trialAlreadyOpen);
     if (stage.nextTrialNumber === null) return unavailable(CONTROL_REASONS.noTrialsLeft);
     if (stage.phase !== "indicator_added" && stage.phase !== "titrating") {
@@ -139,6 +154,8 @@ export function stopcockAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
     if (!stage.burette.setup) return unavailable(CONTROL_REASONS.stopcockNeedsBurette);
     if (!stage.openTrial) return unavailable(CONTROL_REASONS.stopcockNeedsTrial);
     return AVAILABLE;
@@ -151,6 +168,8 @@ export function deliveryAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
     if (!stage.openTrial) return unavailable(CONTROL_REASONS.deliveryNeedsTrial);
     if (!flags.stopcockOpen) return unavailable(CONTROL_REASONS.deliveryNeedsStopcock);
     return AVAILABLE;
@@ -163,7 +182,7 @@ export function readingAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () =>
-    stage.openTrial ? AVAILABLE : unavailable(CONTROL_REASONS.readingNeedsTrial),
+    stageLock(stage) ?? (stage.openTrial ? AVAILABLE : unavailable(CONTROL_REASONS.readingNeedsTrial)),
   );
 }
 
@@ -173,6 +192,8 @@ export function completionAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
     if (!stage.openTrial) return unavailable(CONTROL_REASONS.readingNeedsTrial);
     if (stage.openTrial.finalReadingMl === null) {
       return unavailable(CONTROL_REASONS.completionNeedsReading);
@@ -187,7 +208,7 @@ export function observationAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () =>
-    stage.openTrial ? AVAILABLE : unavailable(CONTROL_REASONS.observationNeedsTrial),
+    stageLock(stage) ?? (stage.openTrial ? AVAILABLE : unavailable(CONTROL_REASONS.observationNeedsTrial)),
   );
 }
 
@@ -200,7 +221,7 @@ export function swirlAvailability(
   flags: LabControlFlags,
 ): ControlAvailability {
   return gate(flags, () =>
-    stage.openTrial ? AVAILABLE : unavailable(CONTROL_REASONS.swirlNeedsTrial),
+    stageLock(stage) ?? (stage.openTrial ? AVAILABLE : unavailable(CONTROL_REASONS.swirlNeedsTrial)),
   );
 }
 

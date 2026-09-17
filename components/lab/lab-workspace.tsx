@@ -21,6 +21,7 @@ import { ConcordancePanel } from "./concordance-panel";
 import { MeasurementPanel } from "./measurement-panel";
 import { ObservationPanel } from "./observation-panel";
 import { CalculationPanel } from "./calculation-panel";
+import { ReviewSubmitPanel } from "./review-submit-panel";
 
 /**
  * The laboratory workspace.
@@ -135,6 +136,9 @@ function LabWorkspaceBody({
                   </div>
                   <div className="md:col-span-2">
                     <CalculationPanel initialState={initialState} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <ReviewSubmitPanel initialState={initialState} />
                   </div>
                 </div>
               </div>

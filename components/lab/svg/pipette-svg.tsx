@@ -1,16 +1,18 @@
 /**
  * Pipette with its filler.
  *
- * `stage` is UI-only progress: "resting" (in the rack), "filled" (solution drawn
- * up) and "delivered" (emptied into the flask). The volume shown is the
- * configured aliquot size, and the value that reaches the server is still the
- * reading the student enters — the drawing never becomes the source of truth.
+ * `stage` and `fillerAttached` are UI-only progress: "resting" (in the rack),
+ * "filled" (solution drawn up) and "delivered" (emptied into the flask), plus
+ * whether the filler sits on the pipette. The volume shown is the configured
+ * aliquot size, and the value that reaches the server is still the reading the
+ * student enters — the drawing never becomes the source of truth.
  */
 export type PipetteStage = "resting" | "filled" | "delivered";
 
 export function PipetteSvg({
   nominalVolumeMl,
   stage,
+  fillerAttached = false,
   selected = false,
   x = 0,
   y = 0,
@@ -23,6 +25,8 @@ export function PipetteSvg({
    */
   nominalVolumeMl: number | null;
   stage: PipetteStage;
+  /** UI-only: whether the filler is seated on the pipette. */
+  fillerAttached?: boolean;
   selected?: boolean;
   x?: number;
   y?: number;
@@ -32,6 +36,7 @@ export function PipetteSvg({
   const bodyBottom = 168;
   const bulbTop = 0;
   const liquidTop = bodyTop + 10;
+  const filled = stage === "filled";
 
   return (
     <g transform={`translate(${x}, ${y})`}>
@@ -39,7 +44,11 @@ export function PipetteSvg({
         <g
           role="button"
           tabIndex={0}
-          aria-label="Pipette and filler. Activate to fill the pipette."
+          aria-label={
+            fillerAttached
+              ? "Pipette with filler attached. Activate to bring up the pipette controls."
+              : "Pipette, filler not attached. Activate to bring up the pipette controls."
+          }
           onClick={onSelect}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
@@ -53,16 +62,20 @@ export function PipetteSvg({
         </g>
       ) : null}
 
-      {/* Filler bulb */}
-      <ellipse
-        cx={12}
-        cy={bulbTop + 24}
-        rx={14}
-        ry={24}
-        fill={selected ? "var(--primary)" : "var(--foreground)"}
-        opacity={0.9}
-      />
-      <rect x={8} y={bulbTop + 46} width={8} height={10} fill="var(--foreground)" />
+      {/* Filler bulb: seated on the pipette when attached, lifted and faded when not. */}
+      <g opacity={fillerAttached ? 0.9 : 0.4} transform={fillerAttached ? undefined : "translate(0,-10)"}>
+        <ellipse
+          cx={12}
+          cy={bulbTop + 24}
+          rx={14}
+          ry={24}
+          fill={selected ? "var(--primary)" : "var(--foreground)"}
+        />
+        <rect x={8} y={bulbTop + 46} width={8} height={10} fill="var(--foreground)" />
+      </g>
+      {fillerAttached ? null : (
+        <line x1={-6} y1={bulbTop + 52} x2={30} y2={bulbTop + 52} stroke="var(--lab-scale)" strokeWidth={1} strokeDasharray="3 2" />
+      )}
 
       {/* Pipette tube */}
       <rect
@@ -75,10 +88,19 @@ export function PipetteSvg({
         stroke="var(--lab-glass-border)"
         strokeWidth={1.6}
       />
-      {/* Solution drawn up */}
-      {stage === "filled" ? (
-        <rect x={8} y={liquidTop} width={8} height={bodyBottom - liquidTop - 2} fill="var(--lab-liquid)" stroke="var(--lab-liquid-border)" strokeWidth={0.4} />
-      ) : null}
+      {/* Solution drawn up. Always mounted so the fill fades in and out
+          (presentation only); the recorded volume still comes from the server. */}
+      <rect
+        x={8}
+        y={liquidTop}
+        width={8}
+        height={bodyBottom - liquidTop - 2}
+        fill="var(--lab-liquid)"
+        stroke="var(--lab-liquid-border)"
+        strokeWidth={0.4}
+        opacity={filled ? 1 : 0}
+        className="lab-pipette-liquid transition-opacity duration-300"
+      />
       {/* Bulb of the pipette (bulb pipette) */}
       <ellipse cx={12} cy={118} rx={11} ry={20} fill="var(--lab-glass)" stroke="var(--lab-glass-border)" strokeWidth={1.4} />
       <text x={12} y={178} textAnchor="middle" fontSize={9} fill="var(--lab-scale)" fontWeight={500} className="tabular-nums">
@@ -87,7 +109,7 @@ export function PipetteSvg({
       <title>
         {nominalVolumeMl === null
           ? `Pipette with pipette filler. State: ${stage}. This stage does not pipette its analyte.`
-          : `Pipette, ${nominalVolumeMl} mL, with pipette filler. State: ${stage}.`}
+          : `Pipette, ${nominalVolumeMl} mL, with pipette filler${fillerAttached ? " attached" : " (filler not attached)"}. State: ${stage}.`}
       </title>
     </g>
   );

@@ -38,6 +38,7 @@ export type NextActionKind =
   | "report_molarity"
   | "record_observation"
   | "stage_complete"
+  | "review_submit"
   | "read_only";
 
 export interface NextAction {
@@ -119,6 +120,14 @@ export interface StageView {
   analyteKey: string;
   isActive: boolean;
   complete: boolean;
+  /**
+   * True while an earlier stage is still incomplete. The server refuses actions
+   * on a locked stage (`stage_locked`); the bench shows the lock instead of
+   * letting the student discover it through a rejection.
+   */
+  locked: boolean;
+  /** Title of the stage that must be completed first, else null. */
+  lockedBy: string | null;
   phase: SessionPhase;
   preparation: PreparationStepView[];
   nextAction: NextAction | null;
@@ -545,8 +554,7 @@ export function buildLabViewModel(input: LabViewModelInput): LabViewModel {
       ? input.selectedStageKey
       : derivedActiveKey;
 
-  const stages: StageView[] = configuredStages.map((entry) => {
-    const { stageConfig, index, stage, trials, nextTrialNumber } = entry;
+  const stages: StageView[] = configuredStages.map((entry) => {    const { stageConfig, index, stage, trials, nextTrialNumber } = entry;
     // A stage is always present in the resumed session; the fallback keeps the
     // view model total even if a snapshot were missing one.
     const session: StageSession = stage ?? {
@@ -599,6 +607,10 @@ export function buildLabViewModel(input: LabViewModelInput): LabViewModel {
       analyteKey: stageConfig.analyteKey,
       isActive: stageConfig.key === activeStageKey,
       complete: concordance.status === "concordant",
+      // Locks and the experiment-complete override are applied in a second
+      // pass below, once every stage's completion is known.
+      locked: false,
+      lockedBy: null,
       phase: session.phase,
       preparation: preparationSteps(session, stageConfig, labels, config.trialRules.minTrials),
       nextAction,
@@ -632,12 +644,44 @@ export function buildLabViewModel(input: LabViewModelInput): LabViewModel {
     };
   });
 
-  const recordedTrials = stages.reduce((total, stage) => total + stage.concordance.recordedTrials, 0);
-  const requiredTrials = stages.reduce((total, stage) => total + stage.concordance.requiredTrials, 0);
+  // A later stage locks behind the first incomplete earlier stage, mirroring
+  // the server-side `stage_locked` rule so the bench shows the lock up front
+  // instead of letting the student discover it through a rejection.
+  const firstIncompleteIndex = stages.findIndex((stage) => !stage.complete);
+  const unlockedStages = stages.map((stage, index) => {
+    const blocker =
+      firstIncompleteIndex === -1 || index <= firstIncompleteIndex
+        ? null
+        : stages[firstIncompleteIndex];
+    return { ...stage, locked: blocker !== null, lockedBy: blocker?.title ?? null };
+  });
+
+  // Every stage concordant: the bench work is done, and the next step is the
+  // review and submission panel rather than another titration.
+  const experimentComplete =
+    canWrite && unlockedStages.length > 0 && unlockedStages.every((stage) => stage.complete);
+  const finalStages = experimentComplete
+    ? unlockedStages.map((stage) =>
+        stage.isActive
+          ? {
+              ...stage,
+              nextAction: {
+                kind: "review_submit" as const,
+                title: "Review and submit",
+                description:
+                  "Every stage is concordant. Check the results, finish the report and submit the attempt.",
+              },
+            }
+          : stage,
+      )
+    : unlockedStages;
+
+  const recordedTrials = finalStages.reduce((total, stage) => total + stage.concordance.recordedTrials, 0);
+  const requiredTrials = finalStages.reduce((total, stage) => total + stage.concordance.requiredTrials, 0);
 
   return {
     activeStageKey,
-    stages,
+    stages: finalStages,
     progress: {
       recordedTrials,
       requiredTrials,
