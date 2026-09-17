@@ -78,6 +78,21 @@ export const trialRulesSchema = z.object({
 });
 export type TrialRules = z.infer<typeof trialRulesSchema>;
 
+/** How the analyte is portioned: weighed solid, or an accurately pipetted volume. */
+export const analytePortionSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("weighed_mass"),
+    nominalMassG: z.number().positive(),
+    balancePrecisionG: z.number().positive(),
+  }),
+  z.object({
+    kind: z.literal("pipetted_volume"),
+    nominalVolumeMl: z.number().positive(),
+    volumePrecisionMl: z.number().positive(),
+  }),
+]);
+export type AnalytePortionConfig = z.infer<typeof analytePortionSchema>;
+
 /** One titrand/titrant stage, e.g. "KHP vs NaOH" then "HCl vs NaOH". */
 export const titrationStageConfigSchema = z.object({
   key: z.string().min(1).max(64),
@@ -88,18 +103,7 @@ export const titrationStageConfigSchema = z.object({
   stoichiometry: stoichiometrySchema,
   titrantKey: z.string().min(1).max(64),
   analyteKey: z.string().min(1).max(64),
-  analytePortion: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("weighed_mass"),
-      nominalMassG: z.number().positive(),
-      balancePrecisionG: z.number().positive(),
-    }),
-    z.object({
-      kind: z.literal("pipetted_volume"),
-      nominalVolumeMl: z.number().positive(),
-      volumePrecisionMl: z.number().positive(),
-    }),
-  ]),
+  analytePortion: analytePortionSchema,
   indicator: indicatorConfigSchema,
   burette: buretteConfigSchema,
 });

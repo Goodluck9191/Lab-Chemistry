@@ -11,6 +11,7 @@
  */
 import { roundTo } from "@/domain/chemistry/units";
 import type { TrialRules } from "./config";
+import type { FlaskColour } from "./endpoint";
 
 export type TrialStatus = "open" | "recorded" | "rejected" | "discarded_overshoot";
 
@@ -24,6 +25,8 @@ export interface TrialRecord {
   /** Reported quantity for concordance (molarity for Expt 2). */
   reportedMolarityM: number | null;
   endpointJudgement: "correct" | "undertitrated" | "overshot" | null;
+  /** Colour actually seen in the flask when the trial was closed. */
+  observedColour: FlaskColour | null;
   rejectionReason: string | null;
   errorCodes: string[];
 }
@@ -70,6 +73,7 @@ export function startTrial(
     deliveredMl: null,
     reportedMolarityM: null,
     endpointJudgement: null,
+    observedColour: null,
     rejectionReason: null,
     errorCodes: [],
   };

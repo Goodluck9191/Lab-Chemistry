@@ -5,10 +5,12 @@ experiment on screen - preparing solutions, reading a burette, judging an endpoi
 trials until they agree, calculating results and submitting a report - and instructors review and
 mark the submissions.
 
-**Current status: Stage 1, the technical foundation.** The architecture, database, security model,
-domain contracts and interface shell are complete and verified. The simulation itself (apparatus,
-titration, chemistry calculations, automatic marking) is deliberately **not** built yet; see
-[Stage 1 boundary](#stage-1-boundary).
+**Current status: Phase 4, the interactive laboratory.** Experiment 2 runs on a
+server-authoritative titration engine with a 2D SVG bench: the student prepares the solution, fills
+and reads the burette, titrates to the endpoint, repeats trials to concordance, records
+observations and submits calculations - every interaction travelling through one versioned action
+protocol to the server, which owns the hidden reality. See
+[Phase 4 boundary](#phase-4-boundary).
 
 ---
 
@@ -22,14 +24,19 @@ titration, chemistry calculations, automatic marking) is deliberately **not** bu
 | Database | 15 tables, foreign keys, constraints, indexes, RLS on every table, one seeded experiment |
 | Attempts | A student can start an attempt (or resume the open one) and it is stored with a durable state row |
 | Domain model | Experiment, simulation, attempt and secrets contracts - configuration-driven, no per-experiment code |
-| Interface | Student and instructor shells, experiment library, briefing page, laboratory placeholder, error/empty/loading states |
-| Tests | 59 offline tests (domain, access rules, migration audit, secret hygiene) plus a live RLS suite that runs when credentials are supplied |
+| Interface | Student and instructor shells, experiment library, briefing page, error/empty/loading states |
+| Laboratory | Experiment 2 laboratory at `/lab/exp-02/attempt/<id>`: SVG bench, burette with stopcock and meniscus, flask colour, balance, pipette, reagent tray, procedure checklist, trial table, concordance, observations, calculations, autosave status, resume |
+| Simulation | Generic configuration-driven titration engine; hidden per-attempt parameters in `attempt_secrets`; versioned action protocol; revision-guarded autosave; persisted trials, measurements, observations and calculation submissions |
+| Tests | 203 offline tests (domain, application, laboratory view model, transport, component tests in jsdom, migration audit, secret hygiene, laboratory exposure) plus live RLS/persistence/laboratory suites that run when credentials are supplied |
 
 ### Not built yet
 
-The virtual bench and all chemistry: apparatus interaction, the burette, endpoint detection, the
-calculation engine, automatic assessment, the report editor, the instructor marking screens, PDF
-export, and the remaining 16 experiments. Three.js is explicitly out of scope.
+Submission and grading of a completed attempt (the domain lifecycle and the database policies exist,
+the use case does not), automatic marking against the rubric, the report editor, instructor marking
+screens, PDF export, the remaining experiments, and the manual-verified migration of the Experiment 2
+catalog row. The intermediate moles calculation has no submission action, so the laboratory presents
+it as unmarked guidance rather than pretending to check it. Three.js is explicitly out of scope:
+the bench is SVG.
 
 ---
 
@@ -181,10 +188,13 @@ function pins `search_path = ''` with fully-qualified names.
 ## Testing
 
 ```bash
-npm run test        # offline: domain, access rules, migration audit, secret hygiene
+npm run test        # offline: domain, application, laboratory, security, component tests
 ```
 
-The offline suite includes two security suites that need no database: a **static audit of the SQL**
+Component tests opt into jsdom with a `@vitest-environment jsdom` docblock (`tests/ui`), so the rest
+of the suite stays fast and dependency-free.
+
+The offline suite includes security suites that need no database: a **static audit of the SQL**
 (every table has RLS enabled, every table has its Supabase default grants revoked, `attempt_secrets`
 has zero policies, no policy is permissive, `DELETE` is granted nowhere, the answer key and the role
 column are excluded from client grants, and every `SECURITY DEFINER` function pins its search path),
@@ -192,18 +202,34 @@ and a **secret-hygiene audit of the source tree** (the service-role key is read 
 module, no client component imports a privileged module, and authorisation never trusts
 `getSession()`).
 
+an **audit of the laboratory surface** (browser-reachable files touch no privileged module, the
+shipped state DTO carries none of the hidden keys, and the endpoint error string contains no volume).
+
 `tests/integration/rls.test.ts` is the suite that actually proves isolation with two signed-in
-students and an instructor. It **skips loudly** when credentials are absent, because "no database
-configured" must never be mistaken for "verified secure":
+students and an instructor, alongside `persistence.test.ts` (the autosave write pattern) and
+`lab-flow.test.ts` (the laboratory's trial, measurement, observation and calculation rows). They
+**skip loudly** when credentials are absent, because "no database configured" must never be mistaken
+for "verified secure":
 
 ```
 [rls.test] SKIPPED: live Supabase credentials are not set, so student data isolation
 has NOT been verified against a real database.
 ```
 
-## Stage 1 boundary
+## Phase 4 boundary
 
-Stage 1 stops at the foundation on purpose. Everything the simulation needs - the four-layer
-structure, the schema with its policies, the hidden-parameter architecture, the domain contracts and
-the laboratory layout - exists and is tested. What remains for the next stage is the chemistry
-itself, starting with the titration engine and a first complete experiment.
+The laboratory is complete for Experiment 2 and deliberately stops there. What the engine and the
+configuration already support is wired end to end; what they do not support is stated in the
+interface rather than faked:
+
+- **No submission yet.** A student can work and save an attempt, but there is no use case that moves
+  it to `submitted`, so the laboratory never claims an attempt was handed in.
+- **The balance reading is entered, not generated.** No protocol action returns an instrument
+  reading, so the mass the student records is what is stored and checked.
+- **The moles step is unmarked.** Only the concentration reported per trial can be graded, because
+  that is the only calculation with a protocol action.
+- **Catalog gaps are disclosed.** The public Experiment 2 catalog row predates the two-stage
+  manual-verified configuration, so the laboratory says which reagents and apparatus it draws from
+  the configuration instead.
+- **Chemicals stay as they are.** The manual citation (`MUST NSCH 1103, pp.16-21`) is referenced in
+  code comments only; no new chemistry facts were added for this phase.

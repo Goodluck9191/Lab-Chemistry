@@ -11,8 +11,14 @@
  */
 import { z } from "zod";
 
-/** Bump when the envelope or action set changes so old clients fail loudly. */
-export const SIMULATION_PROTOCOL_VERSION = 1;
+/**
+ * Bump when the envelope or action set changes so old clients fail loudly.
+ *
+ * v2 added `record_observation` for the Phase 4 laboratory: a stale client
+ * bundle sending v1 is rejected with a clear parse error and reloads, instead
+ * of streaming actions the server can no longer interpret.
+ */
+export const SIMULATION_PROTOCOL_VERSION = 2;
 
 const positiveFinite = z.number().finite().positive();
 
@@ -68,6 +74,12 @@ export const titrationActionSchema = z.discriminatedUnion("type", [
     stageKey: z.string().min(1).max(64),
     trialNumber: z.number().int().min(1).max(20),
     studentMolarityM: positiveFinite.max(50),
+  }),
+  z.object({
+    type: z.literal("record_observation"),
+    stageKey: z.string().min(1).max(64),
+    fieldKey: z.string().regex(/^[a-z0-9_]{3,64}$/),
+    text: z.string().min(1).max(2000),
   }),
 ]);
 

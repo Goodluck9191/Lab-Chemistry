@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { requireStudent } from "@/application/auth/dal";
 import { canWriteAttemptData } from "@/application/auth/access";
+import type { AttemptStatus } from "@/domain/attempts";
 import { createServerSupabaseClient } from "@/infrastructure/supabase/server";
 import { createAdminSupabaseClient } from "@/infrastructure/supabase/admin";
 import {
@@ -18,32 +19,19 @@ import {
 import { titrationConfigForExperiment } from "@/domain/experiments/catalog/titration-registry";
 import type { TitrationExperimentConfig } from "@/domain/simulation/titration/config";
 import {
-  addIndicator,
-  addTitrant,
-  completeTrial,
   createTitrationSession,
-  observeEndpoint,
-  pipetteAnalyte,
-  readBurette,
-  reportMolarity,
-  setupApparatus,
-  startTrialAction,
   toPublicJSON,
-  weighAnalyte,
-  type ActionResult,
   type TitrationPublicState,
   type TitrationSession,
 } from "@/domain/simulation/titration/engine";
+import { dispatchTitrationAction } from "@/domain/simulation/titration/dispatch";
 import { observeFlaskColour } from "@/domain/simulation/titration/endpoint";
 import {
   measurementRowsFor,
   trialRowFor,
   trialRowNumber,
 } from "@/domain/simulation/titration/persistence";
-import {
-  parseTitrationEnvelope,
-  type TitrationProtocolAction,
-} from "@/domain/simulation/titration/protocol";
+import { parseTitrationEnvelope } from "@/domain/simulation/titration/protocol";
 import {
   resumeSessionFromSnapshot,
   secretsForStorage,
@@ -67,77 +55,11 @@ export interface TitrationActionResult {
   calculationCorrect: boolean | null;
 }
 
-type DispatchOutcome = Pick<
-  TitrationActionResult,
-  "accepted" | "code" | "message" | "colour" | "calculationCorrect"
->;
-
-function rejected(result: ActionResult): DispatchOutcome {
-  return {
-    accepted: false,
-    code: "code" in result && typeof result.code === "string" ? result.code : "rejected",
-    message:
-      "error" in result && typeof result.error === "string" ? result.error : "Action rejected",
-    colour: null,
-    calculationCorrect: null,
-  };
-}
-
-function acceptedOutcome(extra: Partial<DispatchOutcome> = {}): DispatchOutcome {
-  return { accepted: true, code: null, message: null, colour: null, calculationCorrect: null, ...extra };
-}
-
-/** Route one validated protocol action into the engine. Engine-only rejections. */
-function dispatch(session: TitrationSession, action: TitrationProtocolAction): DispatchOutcome {
-  switch (action.type) {
-    case "setup_apparatus": {
-      const result = setupApparatus(session, action.stageKey, action.titrantKey, action.initialReadingMl);
-      return result.ok ? acceptedOutcome() : rejected(result);
-    }
-    case "weigh_analyte": {
-      const result = weighAnalyte(session, action.stageKey, action.observedMassG);
-      return result.ok ? acceptedOutcome() : rejected(result);
-    }
-    case "pipette_analyte": {
-      const result = pipetteAnalyte(session, action.stageKey, action.observedVolumeMl);
-      return result.ok ? acceptedOutcome() : rejected(result);
-    }
-    case "add_indicator": {
-      const result = addIndicator(session, action.stageKey, action.drops);
-      return result.ok ? acceptedOutcome() : rejected(result);
-    }
-    case "start_trial": {
-      const result = startTrialAction(session, action.stageKey, action.trialNumber, action.initialReadingMl);
-      return result.ok ? acceptedOutcome() : rejected(result);
-    }
-    case "add_titrant": {
-      const result = addTitrant(session, action.stageKey, action.volumeMl);
-      return result.ok ? acceptedOutcome({ colour: result.colour ?? null }) : rejected(result);
-    }
-    case "read_burette": {
-      const result = readBurette(session, action.stageKey, action.observedFinalMl);
-      return result.ok ? acceptedOutcome() : rejected(result);
-    }
-    case "observe_endpoint": {
-      const result = observeEndpoint(session, action.stageKey, action.claimedColour);
-      return result.ok ? acceptedOutcome({ colour: result.actual ?? null }) : rejected(result);
-    }
-    case "complete_trial": {
-      const result = completeTrial(session, action.stageKey);
-      return result.ok ? acceptedOutcome() : rejected(result);
-    }
-    case "report_molarity": {
-      const result = reportMolarity(session, action.stageKey, action.trialNumber, action.studentMolarityM);
-      // `expected` is stripped here: it must never cross to the browser.
-      return result.ok
-        ? acceptedOutcome({ calculationCorrect: result.correct ?? null })
-        : rejected(result);
-    }
-  }
-}
 
 export interface LoadedTitrationAttempt {
   attemptId: string;
+  experimentId: string;
+  status: AttemptStatus;
   config: TitrationExperimentConfig;
   session: TitrationSession;
   revision: number;
@@ -181,7 +103,15 @@ export async function loadTitrationAttempt(attemptId: string): Promise<LoadedTit
   }
 
   const session = resumeSessionFromSnapshot(config, secrets, stored.state);
-  return { attemptId: id, config, session, revision: stored.revision, canWrite };
+  return {
+    attemptId: id,
+    experimentId: stored.attempt.experimentId,
+    status: stored.attempt.status,
+    config,
+    session,
+    revision: stored.revision,
+    canWrite,
+  };
 }
 
 /**
@@ -225,17 +155,29 @@ export async function applyTitrationAction(input: unknown): Promise<TitrationAct
   }
 
   const { session, config } = loaded;
-  const outcome = dispatch(session, envelope.action);
+  const outcome = dispatchTitrationAction(session, loaded.experimentId, envelope.action);
 
   // Observations for endpoint colour: derived server-side from hidden truth,
   // so the stored choice reflects the simulation, not the student's claim.
   const observationRows: Array<{
     stepKey: string;
     fieldKey: string;
-    textValue: null;
-    choiceValue: string;
+    textValue: string | null;
+    choiceValue: string | null;
     trialRowNumber: number | null;
   }> = [];
+
+  // Student-written observations mirror into the relational table too. They are
+  // upserted by (attempt, stage, field), so replaying an action is idempotent.
+  for (const observation of session.public.observations) {
+    observationRows.push({
+      stepKey: observation.stageKey,
+      fieldKey: observation.fieldKey,
+      textValue: observation.textValue,
+      choiceValue: null,
+      trialRowNumber: null,
+    });
+  }
   if (envelope.action.type === "complete_trial" || envelope.action.type === "observe_endpoint") {
     const stageKey = envelope.action.stageKey;
     const stage = session.public.stages[stageKey];

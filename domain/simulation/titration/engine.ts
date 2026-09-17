@@ -22,7 +22,7 @@ import { roundTo } from "@/domain/chemistry/units";
 import { createSeededRandom, deriveSeed } from "@/domain/simulation/random";
 import { deliveredVolumeMl, titreFitsBurette } from "./burette";
 import type { TitrationExperimentConfig, TitrationStageConfig } from "./config";
-import { judgeEndpointStop, observeFlaskColour, type FlaskColour } from "./endpoint";
+import { judgeEndpointStop, observeFlaskColour, flaskColourFromConfigName, type FlaskColour } from "./endpoint";
 import { deriveHiddenState, type AttemptHiddenState } from "./hidden";
 import { classifyReadingError } from "./reading";
 import {
@@ -49,23 +49,68 @@ export interface StageSession {
   analyteVolumeMl: number | null;
   buretteInitialMl: number | null;
   deliveredSoFarMl: number;
+  /** Current appearance of the flask contents, or null for an empty flask. */
+  flaskColour: FlaskColour | null;
   trials: TrialRecord[];
   reportedMolaritiesM: number[];
   openTrial: TrialRecord | null;
 }
 
-export interface TitrationPublicState {
+/**
+ * Derived concordance summary. Computed by the domain from the trial rules and
+ * the student's own recorded/reported values — never by the UI, so the browser
+ * can display which trials agree without owning a second algorithm.
+ */
+export interface StageConcordance {
+  readonly mode: "molarity" | "titre_volume";
+  readonly requiredTrials: number;
+  readonly maxTrials: number;
+  readonly recordedTrials: number;
+  /** Trial numbers discarded (overshoot or rejection) — shown, never re-run. */
+  readonly discardedTrials: number[];
+  readonly reportedMolaritiesM: number[];
+  readonly spread: number | null;
+  readonly allowedSpread: number;
+  readonly spreadUnit: "mol/L" | "mL";
+  readonly concordant: boolean;
+  readonly averageMolarityM: number | null;
+  readonly trialsStillNeeded: number;
+  readonly detail: string;
+}
+
+/** A student-written observation. Text only; the engine stores no free numbers. */
+export interface PublicObservation {
+  readonly stageKey: string;
+  readonly fieldKey: string;
+  readonly textValue: string;
+}
+
+/** Maximum number of stored observations per attempt. */
+export const MAX_OBSERVATIONS = 40;
+
+/** Field keys are simple identifiers, so a client cannot inject arbitrary keys. */
+export const OBSERVATION_FIELD_KEY_PATTERN = /^[a-z0-9_]{3,64}$/;
+
+/** Internal + persisted session state (no derived projections). */
+export interface TitrationSessionState {
   readonly schemaVersion: 1;
   readonly experimentNumber: number;
   readonly stages: Record<string, StageSession>;
   readonly errorEvents: ErrorEvent[];
   completedTrials: number;
+  observations: PublicObservation[];
+}
+
+/** Safe-to-render projection: session state plus freshly derived concordance. */
+export interface TitrationPublicState extends Omit<TitrationSessionState, "stages"> {
+  readonly stages: Record<string, StageSession & { concordance: StageConcordance }>;
+  readonly observations: PublicObservation[];
 }
 
 export interface TitrationSession {
   readonly config: TitrationExperimentConfig;
   readonly hidden: AttemptHiddenState;
-  readonly public: TitrationPublicState;
+  readonly public: TitrationSessionState;
 }
 
 export type ActionResult = { ok: true } | { ok: false; error: string; code: string };
@@ -109,6 +154,7 @@ export function createTitrationSession(
       analyteVolumeMl: null,
       buretteInitialMl: null,
       deliveredSoFarMl: 0,
+      flaskColour: null,
       trials: [],
       reportedMolaritiesM: [],
       openTrial: null,
@@ -123,6 +169,7 @@ export function createTitrationSession(
       stages,
       errorEvents: [],
       completedTrials: 0,
+      observations: [],
     },
   };
 }
@@ -152,6 +199,9 @@ export function setupApparatus(
   stage.apparatusReady = true;
   stage.buretteInitialMl = roundTo(initialReadingMl, 2);
   stage.deliveredSoFarMl = 0;
+  // A freshly rinsed burette starts over an empty flask: nothing has been
+  // delivered and no indicator is present yet.
+  stage.flaskColour = null;
   stage.phase = "setup";
   return { ok: true };
 }
@@ -181,6 +231,8 @@ export function weighAnalyte(
   }
   stage.analyteMassG = roundTo(observedMassG, 2);
   stage.phase = "analyte_ready";
+  // New sample in a clean flask: no solution colour to report yet.
+  stage.flaskColour = null;
   const quality = classifyReadingError("balance", Math.abs(observedMassG - cfg.analytePortion.nominalMassG));
   if (quality === "gross_error") {
     recordError(session, {
@@ -212,6 +264,7 @@ export function pipetteAnalyte(
   }
   stage.analyteVolumeMl = roundTo(observedVolumeMl, 2);
   stage.phase = "analyte_ready";
+  stage.flaskColour = null;
   return { ok: true };
 }
 
@@ -238,6 +291,9 @@ export function addIndicator(
   }
   stage.indicatorDrops = drops;
   stage.phase = "indicator_added";
+  // The indicator's configured acid colour is what the student now sees; it is
+  // read from the configuration rather than hardcoded here or in the UI.
+  stage.flaskColour = flaskColourFromConfigName(cfg.indicator.acidColour);
   if (drops < min || drops > max) {
     recordError(session, {
       code: "reading_error",
@@ -274,6 +330,7 @@ export function startTrialAction(
     );
     stage.openTrial = trial;
     stage.phase = "titrating";
+    stage.deliveredSoFarMl = 0;
     return { ok: true };
   } catch (error) {
     return fail(error instanceof Error ? error.message : "cannot start trial", "invalid_sequence");
@@ -312,10 +369,12 @@ export function addTitrant(
   }
   trial.errorCodes.push(`delivered:${roundTo(volumeMl, 2)}`);
   const total = trialDelivered(trial);
+  stage.deliveredSoFarMl = total;
   const colour = observeFlaskColour(cfg.indicator, total, {
     equivalenceMl: truth.equivalenceMl,
     observableMl: truth.observableMl,
   }).colour;
+  stage.flaskColour = colour;
   return { ok: true, colour };
 }
 
@@ -375,6 +434,7 @@ export function observeEndpoint(
     equivalenceMl: truth.equivalenceMl,
     observableMl: truth.observableMl,
   }).colour;
+  stage.flaskColour = actual;
   if (claimedColour !== actual) {
     recordError(session, {
       code: "reading_error",
@@ -388,6 +448,7 @@ export function observeEndpoint(
 }
 
 export function completeTrial(session: TitrationSession, stageKey: string): ActionResult {
+  const cfg = stageConfig(session.config, stageKey);
   const stage = mutableStage(session, stageKey);
   const trial = stage.openTrial;
   if (!trial || trial.status !== "open") {
@@ -401,7 +462,12 @@ export function completeTrial(session: TitrationSession, stageKey: string): Acti
     equivalenceMl: truth.equivalenceMl,
     observableMl: truth.observableMl,
   });
+  const observedColour = observeFlaskColour(cfg.indicator, trial.deliveredMl, {
+    equivalenceMl: truth.equivalenceMl,
+    observableMl: truth.observableMl,
+  }).colour;
   trial.endpointJudgement = judgement;
+  trial.observedColour = observedColour;
   if (judgement === "overshot") {
     trial.status = "discarded_overshoot";
     trial.rejectionReason = "overshot endpoint: discard and repeat per manual";
@@ -409,7 +475,11 @@ export function completeTrial(session: TitrationSession, stageKey: string): Acti
       code: "over_titration",
       trialNumber: trial.trialNumber,
       stageKey,
-      detail: `delivered ${trial.deliveredMl.toFixed(2)} mL vs observable ${truth.observableMl.toFixed(2)} mL`,
+      // SECURITY: the comparison against the hidden endpoint is deliberately
+      // numeric-free. This detail string is persisted into the public snapshot
+      // and shipped to the browser, so quoting the observable endpoint here
+      // would hand the student the answer.
+      detail: "endpoint overshot: discard the solution and repeat the trial per the manual",
       severe: false,
     });
     stage.trials.push(trial);
@@ -492,9 +562,123 @@ function expectedMolarityForTrial(
   });
 }
 
+/**
+ * Record (or replace) one student-written observation for a stage.
+ *
+ * The engine stores TEXT ONLY: no score, no chemistry and no hidden value is
+ * derived here, and the field key must be a plain identifier. Which field keys
+ * an experiment offers is decided by the application layer from the experiment
+ * definition, so unknown keys never reach storage.
+ */
+export function recordObservation(
+  session: TitrationSession,
+  stageKey: string,
+  fieldKey: string,
+  text: string,
+): ActionResult {
+  mutableStage(session, stageKey);
+  if (!OBSERVATION_FIELD_KEY_PATTERN.test(fieldKey)) {
+    return fail("observation field key is not a valid identifier", "invalid_sequence");
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return fail("an observation needs some text", "invalid_sequence");
+  }
+  if (trimmed.length > 2000) {
+    return fail("observation is longer than 2000 characters", "invalid_sequence");
+  }
+  const existing = session.public.observations.find(
+    (o) => o.stageKey === stageKey && o.fieldKey === fieldKey,
+  );
+  if (!existing && session.public.observations.length >= MAX_OBSERVATIONS) {
+    return fail("no room for another observation", "invalid_sequence");
+  }
+  if (existing) {
+    // Observations are replaceable: a student may refine their description.
+    const index = session.public.observations.indexOf(existing);
+    session.public.observations[index] = { stageKey, fieldKey, textValue: trimmed };
+  } else {
+    session.public.observations.push({ stageKey, fieldKey, textValue: trimmed });
+  }
+  return { ok: true };
+}
+
+/**
+ * Derived concordance for one stage. Reuses the SAME domain evaluators as
+ * assessment, so "which trials agree" has exactly one implementation and the
+ * UI can display it without recomputing anything.
+ */
+export function projectStageConcordance(
+  config: TitrationExperimentConfig,
+  stage: StageSession,
+): StageConcordance {
+  const rules = config.trialRules;
+  const concordanceRules = rules.concordance;
+  const recorded = stage.trials.filter((t) => t.status === "recorded");
+  const discarded = stage.trials
+    .filter((t) => t.status === "discarded_overshoot" || t.status === "rejected")
+    .map((t) => t.trialNumber)
+    .sort((a, b) => a - b);
+  const titres = recorded
+    .map((t) => t.deliveredMl)
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+
+  const result = evaluateConcordanceForRules(rules, stage.reportedMolaritiesM, titres);
+
+  let allowedSpread: number;
+  let spreadUnit: "mol/L" | "mL";
+  if (concordanceRules.mode === "molarity") {
+    allowedSpread = concordanceRules.maxSpreadM;
+    spreadUnit = "mol/L";
+  } else {
+    allowedSpread = concordanceRules.toleranceMl;
+    spreadUnit = "mL";
+  }
+
+  // A spread can only be called concordant once enough evidence exists; with
+  // one value the spread is undefined and the rule is simply not yet satisfied.
+  const enoughEvidence =
+    concordanceRules.mode === "molarity"
+      ? stage.reportedMolaritiesM.length >= rules.minTrials
+      : recorded.length >= rules.minTrials;
+
+  return {
+    mode: concordanceRules.mode,
+    requiredTrials: rules.minTrials,
+    maxTrials: rules.maxTrials,
+    recordedTrials: recorded.length,
+    discardedTrials: discarded,
+    reportedMolaritiesM: [...stage.reportedMolaritiesM],
+    spread: Number.isFinite(result.spread) ? result.spread : null,
+    allowedSpread,
+    spreadUnit,
+    concordant: result.concordant && enoughEvidence,
+    averageMolarityM:
+      concordanceRules.mode === "molarity" && stage.reportedMolaritiesM.length > 0
+        ? averageTwoClosest(stage.reportedMolaritiesM)
+        : null,
+    trialsStillNeeded: Math.max(0, rules.minTrials - recorded.length),
+    detail: result.detail,
+  };
+}
+
+/**
+ * Serialisable public projection: the persisted session state plus freshly
+ * derived concordance. Contains NOTHING hidden by construction, and because the
+ * derivations are recomputed here they can never be stale or client-authored.
+ */
+export function projectPublicState(session: TitrationSession): TitrationPublicState {
+  const base = JSON.parse(JSON.stringify(session.public)) as TitrationSessionState;
+  const stages: Record<string, StageSession & { concordance: StageConcordance }> = {};
+  for (const [key, stage] of Object.entries(base.stages)) {
+    stages[key] = { ...stage, concordance: projectStageConcordance(session.config, stage) };
+  }
+  return { ...base, stages };
+}
+
 /** Serialisable public projection. Contains NOTHING hidden by construction. */
 export function toPublicJSON(session: TitrationSession): TitrationPublicState {
-  return JSON.parse(JSON.stringify(session.public)) as TitrationPublicState;
+  return projectPublicState(session);
 }
 
 export interface GradeBreakdown {

@@ -16,7 +16,14 @@ import {
 } from "@/domain/simulation";
 import type { AttemptSecrets } from "@/domain/simulation/secrets";
 import type { TitrationExperimentConfig } from "./config";
-import type { TitrationPublicState, TitrationSession } from "./engine";
+import {
+  projectPublicState,
+  type StageConcordance,
+  type StageSession,
+  type TitrationPublicState,
+  type TitrationSession,
+  type TitrationSessionState,
+} from "./engine";
 import { measurementRowsFor, trialRowFor } from "./persistence";
 import { titrationPublicStateSchema } from "./schema";
 
@@ -89,11 +96,27 @@ export function hiddenFromSecrets(
 // Snapshot mapping
 // ---------------------------------------------------------------------------
 
+/**
+ * Stage the student is currently working in: the first stage that still needs
+ * trials, otherwise the last configured stage. Derived from public data only.
+ */
+function activeStageKey(session: TitrationSession, publicState: TitrationPublicState): string {
+  const keys = Object.keys(publicState.stages);
+  for (const key of keys) {
+    if (publicState.stages[key].concordance.recordedTrials < publicState.stages[key].concordance.requiredTrials) {
+      return key;
+    }
+  }
+  return keys[keys.length - 1] ?? "titration";
+}
+
 /** Full snapshot written on every accepted action (autosave unit). */
 export function snapshotFromSession(session: TitrationSession): SimulationState {
   const base = createInitialSimulationState();
-  const publicState: TitrationPublicState = JSON.parse(JSON.stringify(session.public));
-  const activeStageKey = Object.keys(publicState.stages)[0] ?? "titration";
+  // Projected (not raw) state: the stored document carries the same derived
+  // concordance the browser sees, and is validated before it is persisted.
+  const publicState = projectPublicState(session);
+  const activeStage = activeStageKey(session, publicState);
 
   for (const trial of Object.values(publicState.stages).flatMap((s) => [
     ...s.trials,
@@ -129,11 +152,28 @@ export function snapshotFromSession(session: TitrationSession): SimulationState 
     }
   }
 
+  // Student-written observations mirror into the generic audit array as well as
+  // the relational rows, so an instructor read of the snapshot sees them.
+  for (const observation of publicState.observations) {
+    base.observations.push({
+      stepKey: observation.stageKey,
+      fieldKey: observation.fieldKey,
+      textValue: observation.textValue,
+    });
+  }
+
   return {
     ...base,
-    currentStep: activeStageKey,
+    currentStep: activeStage,
     titration: titrationPublicStateSchema.parse(publicState),
   };
+}
+
+/** Strip the derived concordance a stage may carry in the persisted document. */
+function toSessionStage(stage: StageSession & { concordance?: StageConcordance }): StageSession {
+  const copy: StageSession & { concordance?: StageConcordance } = { ...stage };
+  delete copy.concordance;
+  return copy;
 }
 
 /** Rebuild a resumable engine session. Throws on missing/corrupt data. */
@@ -149,9 +189,22 @@ export function resumeSessionFromSnapshot(
   if (parsed.titration.experimentNumber !== config.experimentNumber) {
     throw new Error("snapshot belongs to a different experiment");
   }
+  const stored = parsed.titration;
+  const stages: Record<string, StageSession> = {};
+  for (const [key, stage] of Object.entries(stored.stages)) {
+    stages[key] = toSessionStage(stage);
+  }
+  const publicState: TitrationSessionState = {
+    schemaVersion: stored.schemaVersion,
+    experimentNumber: stored.experimentNumber,
+    stages,
+    errorEvents: JSON.parse(JSON.stringify(stored.errorEvents)) as TitrationSessionState["errorEvents"],
+    completedTrials: stored.completedTrials,
+    observations: JSON.parse(JSON.stringify(stored.observations)) as TitrationSessionState["observations"],
+  };
   return {
     config,
     hidden: hiddenFromSecrets(secrets, config),
-    public: JSON.parse(JSON.stringify(parsed.titration)) as TitrationPublicState,
+    public: publicState,
   };
 }

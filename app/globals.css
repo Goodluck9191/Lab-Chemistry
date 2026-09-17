@@ -22,11 +22,15 @@
   --warning: #b45309;
   --danger: #b42318;
 
-  /* laboratory palette (used by later simulation stages) */
-  --lab-glass: #dce6f1;
-  --lab-liquid: #cfe3ff;
-  --lab-endpoint: #d946a6;
-  --lab-precipitate: #efe3d3;
+  /* laboratory palette — strengthened for clear visibility against light backgrounds */
+  --lab-glass: #c0d0e2;
+  --lab-glass-border: #7a8fa6;
+  --lab-liquid: #8fbde0;
+  --lab-liquid-border: #5a8bb0;
+  --lab-endpoint: #c22e82;
+  --lab-precipitate: #d9c4aa;
+  --lab-scale: #404857;
+  --lab-wall: #e4e8ee;
 
   --radius-sm: 0.375rem;
   --radius-md: 0.625rem;
@@ -52,9 +56,13 @@
     --danger: #f87171;
 
     --lab-glass: #263041;
+    --lab-glass-border: #5a6d85;
     --lab-liquid: #1e3355;
+    --lab-liquid-border: #3a5a80;
     --lab-endpoint: #d946a6;
     --lab-precipitate: #3a3025;
+    --lab-scale: #8a94a8;
+    --lab-wall: #1c2130;
   }
 }
 
@@ -73,9 +81,13 @@
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-lab-glass: var(--lab-glass);
+  --color-lab-glass-border: var(--lab-glass-border);
   --color-lab-liquid: var(--lab-liquid);
+  --color-lab-liquid-border: var(--lab-liquid-border);
   --color-lab-endpoint: var(--lab-endpoint);
   --color-lab-precipitate: var(--lab-precipitate);
+  --color-lab-scale: var(--lab-scale);
+  --color-lab-wall: var(--lab-wall);
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
@@ -119,6 +131,84 @@ body {
     linear-gradient(to right, var(--line) 1px, transparent 1px),
     linear-gradient(to bottom, var(--line) 1px, transparent 1px);
   background-size: 28px 28px;
+}
+
+/* -----------------------------------------------------------------------------
+   Laboratory bench: motion that communicates a physical action only. Every
+   transition below is neutralised by the prefers-reduced-motion block above.
+   -------------------------------------------------------------------------- */
+
+/* Liquid level in the burette and the flask follows the last saved delivery. */
+.lab-liquid-level {
+  transition: y 240ms ease-out, height 240ms ease-out;
+}
+
+/* The meniscus settles when the level changes. */
+.lab-meniscus {
+  transition: transform 240ms ease-out;
+}
+
+/* The stopcock handle swings between closed and open. */
+.lab-stopcock {
+  transition: transform 180ms ease-out, height 180ms ease-out;
+  transform-origin: top center;
+}
+
+/* Flask colour change: a slow swell, as the indicator turns. */
+.lab-flask-colour {
+  transition: opacity 320ms ease-in-out;
+}
+
+/* Liquid running out of the stopcock while it is open: a steady flow. */
+@keyframes lab-stream-motion {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.lab-stream {
+  animation: lab-stream-motion 800ms ease-in-out infinite;
+}
+
+/* Ripple on the flask surface just after titrant lands. Gesture-like, faint. */
+@keyframes lab-ripple-motion {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  40% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+
+.lab-ripple {
+  animation: lab-ripple-motion 700ms ease-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+/* Swirling the flask: a small, calm rotation, not a game animation. */
+@keyframes lab-swirl-motion {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+
+.lab-swirl {
+  animation: lab-swirl-motion 1.4s ease-in-out infinite;
+  transform-origin: 50% 90%;
 }
 
 /* Landing page illustration motion. Disabled via prefers-reduced-motion above. */
