@@ -14,7 +14,7 @@
  * Pure: no React, no DOM, no chemistry. It reads the view model and the UI
  * flags, and returns strings.
  */
-import type { StageView } from "./view-model";
+import type { SolutionView, StageView } from "./view-model";
 
 export interface ControlAvailability {
   available: boolean;
@@ -57,6 +57,33 @@ export const CONTROL_REASONS = {
   completionNeedsReading: "Record the final burette reading before completing the trial.",
   observationNeedsTrial: "There is no trial in progress to observe.",
   swirlNeedsTrial: "There is nothing in the flask to swirl yet.",
+
+  stockAlreadyMeasured: "The stock solution has already been measured.",
+  dilutionNeedsStock: "Measure the stock solution before diluting it.",
+  solutionAlreadyDiluted: "Distilled water has already been added to the dilution.",
+  mixNeedsDilution: "Add the distilled water before mixing the solution.",
+  solutionAlreadyMixed: "The working solution is already mixed.",
+  portionNeedsSolution: "Prepare the working solution from the stock before taking a portion of it.",
+  portionAlreadyObtained: "The beaker already holds a portion of the working solution.",
+  conditionNeedsPortion: "Obtain a portion of the working solution in a beaker before conditioning the burette.",
+
+  buretteAlreadyClean: "The burette has already been rinsed with tap water.",
+  conditionNeedsClean: "Rinse the burette with tap water before conditioning it.",
+  buretteAlreadyConditioned: "The burette has had its three NaOH conditioning rinses.",
+  bubbleNeedsBurette: "Fill the burette before clearing air from its tip.",
+  bubbleAlreadyCleared: "Air has already been expelled from the burette tip.",
+  beakerWeighNeedsBurette: "Set up the burette before weighing.",
+  beakerWeighingsDone: "Both beaker weighings are already recorded for this stage.",
+  dissolveNeedsSample: "Weigh the KHP sample before dissolving it.",
+  khpAlreadyDissolved: "The KHP is already dissolved.",
+  transferNeedsDissolved: "Dissolve the KHP before transferring it.",
+  solutionAlreadyTransferred: "The solution is already in the flask.",
+  beakerRinseNeedsTransfer: "Transfer the solution before rinsing the beaker.",
+  beakerAlreadyRinsed: "The beaker has had both rinses into the flask.",
+  placeNeedsBurette: "Fill the burette before placing the flask under it.",
+  flaskAlreadyPlaced: "The flask is already under the burette.",
+  discardNothingToDiscard: "There is no completed trial to discard yet.",
+  discardAlreadyDone: "The completed trial has already been discarded.",
 } as const;
 
 export type ControlReasonKey = keyof typeof CONTROL_REASONS;
@@ -228,4 +255,216 @@ export function swirlAvailability(
 /** Enlarge the burette to read the meniscus. A read aid, so only the gate applies. */
 export function focusModeAvailability(flags: LabControlFlags): ControlAvailability {
   return gate(flags, () => AVAILABLE);
+}
+
+// ---------------------------------------------------------------------------
+// Part I: the working titrant prepared from stock. Session-level, so these read
+// the solution view rather than a stage.
+// ---------------------------------------------------------------------------
+
+/** Measure the stock solution the working titrant is diluted from. */
+export function stockMeasureAvailability(
+  solution: SolutionView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () =>
+    solution.stockVolumeMl === null ? AVAILABLE : unavailable(CONTROL_REASONS.stockAlreadyMeasured),
+  );
+}
+
+/** Add distilled water to complete the dilution. */
+export function dilutionAvailability(
+  solution: SolutionView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    if (solution.stockVolumeMl === null) return unavailable(CONTROL_REASONS.dilutionNeedsStock);
+    if (solution.diluted) return unavailable(CONTROL_REASONS.solutionAlreadyDiluted);
+    return AVAILABLE;
+  });
+}
+
+/** Stopper as far as possible and swirl to mix the dilution. */
+export function mixSolutionAvailability(
+  solution: SolutionView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    if (!solution.diluted) return unavailable(CONTROL_REASONS.mixNeedsDilution);
+    if (solution.mixed) return unavailable(CONTROL_REASONS.solutionAlreadyMixed);
+    return AVAILABLE;
+  });
+}
+
+/** Draw a portion of the prepared solution into the beaker. */
+export function naohPortionAvailability(
+  stage: StageView,
+  solution: SolutionView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (!solution.required || !solution.ready) {
+      return unavailable(CONTROL_REASONS.portionNeedsSolution);
+    }
+    if (stage.preparationState.beakerObtained) {
+      return unavailable(CONTROL_REASONS.portionAlreadyObtained);
+    }
+    return AVAILABLE;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Procedure preparation (Experiment 2, Part 2). Each reason mirrors a rule the
+// engine or the trial gate already enforces — see the coupling tests in
+// `tests/application/preparation-availability.test.ts`, which feed the matching
+// state to the real engine and assert it refuses.
+// ---------------------------------------------------------------------------
+
+/** Rinse the burette with tap water (manual cleaning step). */
+export function rinseBuretteAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (stage.preparationState.buretteCleaned) return unavailable(CONTROL_REASONS.buretteAlreadyClean);
+    return AVAILABLE;
+  });
+}
+
+/** Condition the burette with NaOH, three counted rinses. */
+export function conditionBuretteAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (!stage.preparationState.buretteCleaned) return unavailable(CONTROL_REASONS.conditionNeedsClean);
+    if (!stage.preparationState.beakerObtained) {
+      return unavailable(CONTROL_REASONS.conditionNeedsPortion);
+    }
+    if (stage.preparationState.conditioningRinses >= 3) {
+      return unavailable(CONTROL_REASONS.buretteAlreadyConditioned);
+    }
+    return AVAILABLE;
+  });
+}
+
+/** Expel air from the burette tip after filling. */
+export function airBubbleAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (!stage.burette.setup) return unavailable(CONTROL_REASONS.bubbleNeedsBurette);
+    if (stage.preparationState.airBubbleCleared) return unavailable(CONTROL_REASONS.bubbleAlreadyCleared);
+    return AVAILABLE;
+  });
+}
+
+/** Weigh the empty beaker, then beaker plus KHP (weighing by difference). */
+export function beakerWeighAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (!stage.burette.setup) return unavailable(CONTROL_REASONS.beakerWeighNeedsBurette);
+    if (
+      stage.preparationState.beakerMassG !== null &&
+      stage.preparationState.beakerPlusKhpMassG !== null
+    ) {
+      return unavailable(CONTROL_REASONS.beakerWeighingsDone);
+    }
+    return AVAILABLE;
+  });
+}
+
+/** Dissolve the weighed KHP in distilled water. */
+export function dissolveAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (stage.portion.kind !== "weighed_mass" || stage.portion.recordedMassG === null) {
+      return unavailable(CONTROL_REASONS.dissolveNeedsSample);
+    }
+    if (stage.preparationState.khpDissolved) return unavailable(CONTROL_REASONS.khpAlreadyDissolved);
+    return AVAILABLE;
+  });
+}
+
+/** Transfer the KHP solution to the Erlenmeyer flask. */
+export function transferAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (!stage.preparationState.khpDissolved) {
+      return unavailable(CONTROL_REASONS.transferNeedsDissolved);
+    }
+    if (stage.preparationState.khpTransferred) {
+      return unavailable(CONTROL_REASONS.solutionAlreadyTransferred);
+    }
+    return AVAILABLE;
+  });
+}
+
+/** Rinse the beaker into the flask, twice. */
+export function rinseBeakerAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (!stage.preparationState.khpTransferred) {
+      return unavailable(CONTROL_REASONS.beakerRinseNeedsTransfer);
+    }
+    if (stage.preparationState.beakerRinses >= 2) {
+      return unavailable(CONTROL_REASONS.beakerAlreadyRinsed);
+    }
+    return AVAILABLE;
+  });
+}
+
+/** Place the flask under the burette. */
+export function placeFlaskAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (!stage.burette.setup) return unavailable(CONTROL_REASONS.placeNeedsBurette);
+    if (stage.preparationState.flaskPlaced) return unavailable(CONTROL_REASONS.flaskAlreadyPlaced);
+    return AVAILABLE;
+  });
+}
+
+/** Discard a completed trial into the waste container. */
+export function discardAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (!stage.hasCompletedTrial) return unavailable(CONTROL_REASONS.discardNothingToDiscard);
+    if (stage.preparationState.lastTrialDiscarded) {
+      return unavailable(CONTROL_REASONS.discardAlreadyDone);
+    }
+    return AVAILABLE;
+  });
 }

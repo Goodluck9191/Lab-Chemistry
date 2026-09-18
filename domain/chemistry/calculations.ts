@@ -40,6 +40,22 @@ function assertFiniteNonNegative(value: number, what: string): void {
   }
 }
 
+/**
+ * Weighing by difference (Experiment 2 KHP procedure): the sample mass is the
+ * second weighing minus the first. Throws when the second weighing does not
+ * exceed the first, so nothing is silently added to the flask.
+ */
+export function massByDifference(fullG: number, emptyG: number): number {
+  assertFinitePositive(fullG, "full mass");
+  assertFinitePositive(emptyG, "empty mass");
+  if (!(fullG > emptyG)) {
+    throw new RangeError(
+      `weighing by difference needs the second weighing to exceed the first, got ${fullG} g and ${emptyG} g`,
+    );
+  }
+  return fullG - emptyG;
+}
+
 /** C = n / V. Volume is explicit so mL and L can never be confused. */
 export function molarityFromMolesAndVolume(
   moles: number,

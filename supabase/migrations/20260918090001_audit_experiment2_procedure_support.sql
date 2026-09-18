@@ -1,55 +1,68 @@
 -- =============================================================================
--- Seed data: Experiment 2 (ACID-BASE TITRATION), procedure-accurate catalog.
+-- 0007 audit: Experiment 2 procedure support (Phase 4.8)
 --
--- Parts I-III of the supplied practical procedure: NaOH dilution, KHP
--- standardization with the full preparation chain, and HCl determination.
--- Counted repeats (3x conditioning, 2x rinses, 3-4 trials) are snapshot
--- counters, not step rows. The unknown HCl concentration is deliberately NULL.
+-- AUDIT FINDINGS (procedure vs database, verified against the supplied
+-- ACID-BASE TITRATION procedure, Parts I-III):
 --
--- NOTE ON CONTENT: the canonical, typed definition of this experiment lives in
--- domain/experiments/catalog/exp-02-standardisation.ts. Keep the two in sync
--- by hand until the config-to-database seeder exists; the Phase 4.8 migration
--- (0007) carries the same repair for databases seeded earlier.
+--  1. experiment_trials had no stage column. Trial-to-stage mapping lived only
+--     in the shared trial_number ranges plus the snapshot, so a grading query
+--     could not ask "all Stage B trials of this attempt" from the table.
+--     Fixed additively: nullable `stage_key`, written for new rows, NULL for
+--     rows written before procedure tracking (no backfill invented).
+--
+--  2. The exp-02 catalog rows were the Stage-1 sketch (7 steps, 4 chemicals,
+--     5 apparatus, accuracy 'assumed'): no Part I dilution, no Part III HCl,
+--     cleaning/conditioning/air-bubble/dissolve/transfer/rinses/placement/
+--     disposal missing, wrong vessel on weighing, "50 mL" vs ~30 mL, "two to
+--     three drops" vs 3-4, "30 seconds" vs 45-60 s, NaOH listed at 0.1 M vs
+--     the ~0.2 M working strength. Fixed by replacing the exp-02 catalog rows
+--     with the procedure-accurate set. The accuracy flag stays 'assumed': the
+--     copy review that promotes it is a separate decision.
+--
+-- WHAT THIS MIGRATION DELIBERATELY DOES NOT DO (per audit rules):
+--  - no per-click tables (repeats live as counters in the snapshot);
+--  - no chemistry functions in SQL (domain calculates, database stores);
+--  - no hidden-value exposure (no grant touches attempt_secrets or the
+--    calculation answer-key columns);
+--  - no old-migration rewrites; old snapshots resume via additive defaults.
 -- =============================================================================
 
-insert into public.experiments (
-  id, experiment_number, slug, title, description, aim, theory, safety,
-  type, subtype, status, order_index, config, config_version, accuracy
-)
-values (
-  'exp-02',
-  2,
-  'standardisation-of-naoh-with-khp',
-  'Standardisation of sodium hydroxide solution using potassium hydrogen phthalate',
-  'Standardise a sodium hydroxide solution against potassium hydrogen phthalate (KHP), an acid primary standard.',
-  'To determine the exact concentration of a sodium hydroxide solution by titration against weighed portions of potassium hydrogen phthalate, and to compare replicate titres for concordance.',
-  'Potassium hydrogen phthalate (KHC8H4O4, molar mass approximately 204.22 g/mol) is a monoprotic weak acid and a suitable primary standard: it is pure, stable, non-hygroscopic and of high molar mass, so weighing errors are small. Sodium hydroxide absorbs carbon dioxide from air and cannot be prepared to an exact concentration, so it must be standardised against a primary standard. The neutralisation is 1:1 (KHC8H4O4 + NaOH -> KNaC8H4O4 + H2O), so at the equivalence point the moles of NaOH equal the moles of KHP. Phenolphthalein is colourless in acid and pink in alkali, so a persistent pale pink marks the endpoint.',
-  array[
-    'Wear safety goggles and a laboratory coat at all times.',
-    'Sodium hydroxide is corrosive: rinse skin contact immediately with plenty of water.',
-    'Never pipette by mouth; always use a pipette filler.',
-    'Handle the burette with care; it is fragile and expensive.',
-    'Read every label before dispensing a reagent.'
-  ],
-  'titration',
-  'acid_base',
-  'published',
-  2,
-  -- PUBLIC projection only. Hidden parameter generators stay server-side.
-  jsonb_build_object(
-    'titrant', 'NaOH',
-    'analyte', 'KHP',
-    'stoichiometricRatio', 1,
-    'indicator', 'phenolphthalein',
-    'requiredTrials', 3
-  ),
-  1,
-  'assumed'
-)
-on conflict (id) do nothing;
+-- -----------------------------------------------------------------------------
+-- 1. Trial stage attribution (additive, nullable, no backfill invented).
+-- -----------------------------------------------------------------------------
+alter table public.experiment_trials
+  add column if not exists stage_key text;
 
--- Steps are replaced wholesale so a re-seed repairs rather than hybridises
--- (student attempt data never references these rows).
+comment on column public.experiment_trials.stage_key is
+  'Stage that ran the trial (e.g. stage-a-khp-naoh). Written for new rows; NULL for rows written before procedure tracking. Stage never feeds back into the engine: resume reads the snapshot.';
+
+-- The RLS insert/update column grants are explicit lists, so the new column
+-- must be granted or writes of it are refused. Grants are re-issued whole
+-- (GRANT is idempotent); every other column is unchanged.
+revoke all on public.experiment_trials from anon, authenticated;
+
+grant select on public.experiment_trials to authenticated;
+grant insert (attempt_id, trial_number, status, initial_reading, final_reading,
+              titre_volume, endpoint_observed, rejection_reason, stage_key)
+  on public.experiment_trials to authenticated;
+grant update (status, initial_reading, final_reading, titre_volume,
+              endpoint_observed, rejection_reason, stage_key)
+  on public.experiment_trials to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 2. Experiment 2 catalog repair.
+--
+-- Steps are one row per MEANINGFUL procedure step; counted repeats (3x
+-- conditioning, 2x rinses, 3-4 trials) stay counters in the snapshot, not rows.
+-- Chemicals distinguish stock / working / unknown / solvent / wash, with the
+-- unknown HCl concentration deliberately NULL (never stored, never readable).
+-- Apparatus lists only procedure-required ware with verified sizes; the
+-- graduated cylinder size is unstated in the source, so its capacity is NULL
+-- rather than invented. No volumetric flask, no stopper: unused by Parts I-III.
+-- -----------------------------------------------------------------------------
+
+-- Steps: replaced wholesale (student attempt data never references these rows:
+-- observations carry step_key as free text, so nothing orphans).
 delete from public.experiment_steps where experiment_id = 'exp-02';
 
 insert into public.experiment_steps (experiment_id, step_number, title, instruction, is_required)
@@ -115,6 +128,8 @@ values
   ('exp-02', 30, 'Discard, repeat and calculate HCl',
    'Discard into waste. Repeat for three trials (a fourth if the spread exceeds 0.005 M), average the two closest HCl molarities, and note the measurement uncertainties.', true);
 
+-- Chemicals: corrected strength (0.1 -> ~0.2 M working NaOH) plus the missing
+-- stock, unknown, and wash rows. The unknown HCl concentration stays NULL.
 insert into public.experiment_chemicals (
   experiment_id, chemical_key, name, formula, role, concentration, concentration_unit,
   hazard_codes, is_required
@@ -143,18 +158,53 @@ on conflict (experiment_id, chemical_key) do update set
   hazard_codes = excluded.hazard_codes,
   is_required = excluded.is_required;
 
+-- Apparatus: the existing five rows are untouched; only procedure-required ware
+-- is added. Capacities the source does not state are NULL, not invented.
 insert into public.experiment_apparatus (
   experiment_id, apparatus_key, name, capacity_ml, graduation_ml, is_required
 )
 values
-  ('exp-02', 'burette_50', 'Burette, 50 mL', 50, 0.1, true),
-  ('exp-02', 'conical_flask_250', 'Conical flask, 250 mL', 250, null, true),
-  ('exp-02', 'weighing_bottle', 'Weighing bottle', null, null, true),
-  ('exp-02', 'analytical_balance', 'Analytical balance (0.1 mg)', null, null, true),
-  ('exp-02', 'wash_bottle', 'Wash bottle', null, null, true),
   ('exp-02', 'beaker_250', 'Beaker, 250 mL', 250, null, true),
   ('exp-02', 'glass_rod', 'Glass stirring rod', null, null, true),
   ('exp-02', 'watch_glass', 'Watch glass', null, null, true),
   ('exp-02', 'graduated_cylinder', 'Graduated cylinder', null, null, true),
   ('exp-02', 'waste_container', 'Waste container', null, null, true)
 on conflict (experiment_id, apparatus_key) do nothing;
+
+-- -----------------------------------------------------------------------------
+-- Self-verification: the migration fails loudly (rather than half-applying)
+-- if the catalog repair did not land exactly as audited.
+-- -----------------------------------------------------------------------------
+do $$
+declare
+  step_count integer;
+  chemical_count integer;
+  apparatus_count integer;
+begin
+  select count(*) into step_count
+    from public.experiment_steps where experiment_id = 'exp-02';
+  if step_count <> 30 then
+    raise exception 'exp-02 procedure repair expected 30 steps, found %', step_count;
+  end if;
+
+  select count(*) into chemical_count
+    from public.experiment_chemicals where experiment_id = 'exp-02';
+  if chemical_count <> 7 then
+    raise exception 'exp-02 procedure repair expected 7 chemicals, found %', chemical_count;
+  end if;
+
+  select count(*) into apparatus_count
+    from public.experiment_apparatus where experiment_id = 'exp-02';
+  if apparatus_count <> 10 then
+    raise exception 'exp-02 procedure repair expected 10 apparatus rows, found %', apparatus_count;
+  end if;
+
+  if exists (
+    select 1 from public.experiment_chemicals
+    where experiment_id = 'exp-02' and chemical_key = 'hcl_unknown'
+      and concentration is not null
+  ) then
+    raise exception 'unknown HCl concentration must never be stored';
+  end if;
+end;
+$$;

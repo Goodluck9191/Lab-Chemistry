@@ -5,6 +5,8 @@
  * - Repeat three times; if molarities spread > 0.005 M, do a fourth.
  * - Average the acid molarity from the two closest values (Part II).
  * - Overshoot -> discard the flask and repeat (trial rejected, not fatal).
+ * - A discarded overshoot does NOT consume the three-trial budget; total
+ *   attempts per stage are bounded separately, as a simulator safety limit.
  * - Concordant titres for precipitation work elsewhere agree within 0.1 mL;
  *   that rule is NOT Expt 2's rule and is kept as the generic titre_volume
  *   mode for other configurations.
@@ -53,13 +55,24 @@ export function startTrial(
   trialNumber: number,
   stageKey: string,
   initialReadingMl: number,
+  /** Recorded trials the manual allows (three, or a fourth if they disagree). */
   maxTrials: number,
+  /** Attempts in total, discarded ones included. A safety bound, not a rule. */
+  maxAttempts: number = maxTrials,
 ): TrialRecord {
   if (trials.some((t) => t.trialNumber === trialNumber && t.stageKey === stageKey)) {
     throw new Error(`trial ${trialNumber} for stage ${stageKey} already exists`);
   }
-  if (trials.length >= maxTrials) {
-    throw new Error(`trial limit of ${maxTrials} reached`);
+  // The manual counts RECORDED trials, and says an overshot endpoint is
+  // discarded and repeated. Only trials that still stand therefore consume the
+  // manual's budget: charging a discarded overshoot against it would make the
+  // experiment impossible to finish after two overshoots.
+  const counting = trials.filter((t) => t.status === "recorded" || t.status === "open").length;
+  if (counting >= maxTrials) {
+    throw new Error(`trial limit of ${maxTrials} recorded trials reached`);
+  }
+  if (trials.length >= maxAttempts) {
+    throw new Error(`no more than ${maxAttempts} attempts are allowed for this stage`);
   }
   if (trials.some((t) => t.status === "open")) {
     throw new Error("another trial is still open");

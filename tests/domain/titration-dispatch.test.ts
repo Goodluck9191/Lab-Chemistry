@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { dispatchTitrationAction } from "@/domain/simulation/titration/dispatch";
 import type { FlaskColour } from "@/domain/simulation/titration/endpoint";
-import type { TitrationProtocolAction } from "@/domain/simulation/titration/protocol";
 import { read } from "../helpers/project-files";
-import { freshSession, prepareStageA, setup, STAGE_A } from "../helpers/titration-fixtures";
+import { freshSession, prepareStageA, provisionStageA, setup, STAGE_A } from "../helpers/titration-fixtures";
 
 /**
  * The router is the single mapping from a protocol action onto a domain
@@ -16,11 +15,21 @@ const EXPERIMENT_ID = "exp-02";
 
 const FLASK_COLOURS: FlaskColour[] = ["colourless", "faint_pink", "pink", "deep_pink"];
 
-function dispatch(action: TitrationProtocolAction, seed = "dispatch-fixture-seed") {
-  const session = freshSession(seed);
-  const outcome = dispatchTitrationAction(session, EXPERIMENT_ID, action);
-  return { session, outcome };
-}
+/** Part I, in protocol form: what the student does before the burette exists. */
+const WORKING_SOLUTION = [
+  { type: "measure_naoh_stock", stageKey: STAGE_A, observedVolumeMl: 10 },
+  { type: "dilute_naoh_solution", stageKey: STAGE_A },
+  { type: "mix_naoh_solution", stageKey: STAGE_A },
+] as const;
+
+/** Cleaning, the titrant portion and the three conditioning rinses. */
+const BURETTE_PREPARATION = [
+  { type: "rinse_burette", stageKey: STAGE_A },
+  { type: "obtain_naoh_portion", stageKey: STAGE_A },
+  { type: "condition_burette", stageKey: STAGE_A },
+  { type: "condition_burette", stageKey: STAGE_A },
+  { type: "condition_burette", stageKey: STAGE_A },
+] as const;
 
 describe("titration action dispatch", () => {
   it("rejects a stage this attempt does not have as a protocol problem", () => {
@@ -37,7 +46,14 @@ describe("titration action dispatch", () => {
   });
 
   it("routes setup through the engine and records the initial reading", () => {
-    const { session, outcome } = dispatch({
+    // Filling requires the working solution, a cleaned burette, its titrant
+    // portion and the conditioning rinses (procedure order), so the harness
+    // performs the preparation first on the same session.
+    const session = freshSession();
+    for (const preparation of [...WORKING_SOLUTION, ...BURETTE_PREPARATION]) {
+      expect(dispatchTitrationAction(session, EXPERIMENT_ID, preparation).accepted).toBe(true);
+    }
+    const outcome = dispatchTitrationAction(session, EXPERIMENT_ID, {
       type: "setup_apparatus",
       stageKey: STAGE_A,
       titrantKey: "naoh",
@@ -49,7 +65,13 @@ describe("titration action dispatch", () => {
   });
 
   it("passes an engine refusal through with the engine's own code and wording", () => {
-    const { session, outcome } = dispatch({
+    // The preparation gate runs first: with a prepared burette the wrong titrant
+    // reaches the engine's own check.
+    const session = freshSession();
+    for (const preparation of [...WORKING_SOLUTION, ...BURETTE_PREPARATION]) {
+      expect(dispatchTitrationAction(session, EXPERIMENT_ID, preparation).accepted).toBe(true);
+    }
+    const outcome = dispatchTitrationAction(session, EXPERIMENT_ID, {
       type: "setup_apparatus",
       stageKey: STAGE_A,
       titrantKey: "hcl",
@@ -97,8 +119,7 @@ describe("titration action dispatch", () => {
 
   it("returns the observed flask colour after a delivery", () => {
     const session = freshSession();
-    setup(session);
-    prepareStageA(session);
+    provisionStageA(session);
     dispatchTitrationAction(session, EXPERIMENT_ID, {
       type: "start_trial",
       stageKey: STAGE_A,
@@ -117,8 +138,7 @@ describe("titration action dispatch", () => {
 
   it("carries correctness for a reported concentration but never the expected value", () => {
     const session = freshSession();
-    setup(session);
-    prepareStageA(session);
+    provisionStageA(session);
     dispatchTitrationAction(session, EXPERIMENT_ID, {
       type: "start_trial",
       stageKey: STAGE_A,

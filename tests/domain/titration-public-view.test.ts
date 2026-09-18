@@ -26,11 +26,28 @@ describe("public titration configuration view", () => {
     expect(stageA.analytePortion).toMatchObject({ kind: "weighed_mass", nominalMassG: 0.6 });
 
     expect(stageB.analyteKey).toBe("hcl");
-    expect(stageB.analytePortion).toMatchObject({ kind: "pipetted_volume", nominalVolumeMl: 25 });
+    // The manual transfers the HCl aliquot with a measuring cylinder, and the
+    // apparatus catalogue carries that ware as `graduated_cylinder`.
+    expect(stageB.analytePortion).toMatchObject({
+      kind: "pipetted_volume",
+      nominalVolumeMl: 25,
+      vessel: "graduated_cylinder",
+    });
+
+    // Part I is stated openly: both strengths come from the procedure itself.
+    expect(view.solutionDilution).toEqual({
+      stockKey: "naoh_stock_2m",
+      stockMolarityM: 2,
+      nominalWorkingMolarityM: 0.2,
+    });
+
+    // The endpoint must persist 45-60 s, so the student is told how long.
+    expect(stageA.indicator.endpointPersistenceSeconds).toEqual([45, 60]);
 
     expect(view.trialRules).toMatchObject({
       minTrials: 3,
       maxTrials: 4,
+      maxTrialAttempts: 8,
       discardOnOvershoot: true,
       concordance: { mode: "molarity", maxSpreadM: 0.005 },
     });
@@ -63,6 +80,7 @@ describe("public titration configuration view", () => {
     const config = parseTitrationConfig({
       experimentNumber: 9,
       nominalTitrantMolarityM: 0.1,
+      solutionDilution: null,
       hiddenRanges: { titrantMolarityM: [0.09, 0.11], unknownAnalyteMolarityM: null },
       readingNoiseMl: 0.02,
       endpointBiasMl: 0.05,
@@ -76,7 +94,12 @@ describe("public titration configuration view", () => {
           stoichiometry: { analyteCoefficient: 1, titrantCoefficient: 1 },
           titrantKey: "agno3",
           analyteKey: "nacl",
-          analytePortion: { kind: "pipetted_volume", nominalVolumeMl: 10, volumePrecisionMl: 0.02 },
+          analytePortion: {
+            kind: "pipetted_volume",
+            nominalVolumeMl: 10,
+            volumePrecisionMl: 0.02,
+            vessel: "pipette",
+          },
           indicator: {
             key: "dichlorofluorescein",
             name: "Dichlorofluorescein",
@@ -109,5 +132,8 @@ describe("public titration configuration view", () => {
       toleranceMl: 0.1,
       minConcordantCount: 3,
     });
+    // With no attempt cap stated, it resolves to the manual's recorded-trial cap.
+    expect(view.trialRules.maxTrialAttempts).toBe(4);
+    expect(view.solutionDilution).toBeNull();
   });
 });

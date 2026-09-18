@@ -16,6 +16,7 @@ import { BuretteSvg } from "./svg/burette-svg";
 import { FlaskSvg } from "./svg/flask-svg";
 import { BalanceSvg } from "./svg/balance-svg";
 import { PipetteSvg } from "./svg/pipette-svg";
+import { GraduatedCylinderSvg } from "./svg/graduated-cylinder-svg";
 import {
   BeakerSvg,
   DropperBottleSvg,
@@ -67,7 +68,7 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
     selectedApparatusKey,
     setSelectedApparatusKey,
     setFocusedApparatus,
-    pipetteStage,
+    aliquotStage,
     fillerAttached,
   } = useLabUi();
   const focusReasonId = `${useId()}-bench-focus-reason`;
@@ -93,11 +94,11 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
     if (canSwirl) setSwirl((current) => !current);
   }, [canSwirl, setSelectedApparatusKey, setSwirl]);
 
-  const handlePipetteClick = useCallback(() => {
-    // Selecting only: drawing solution is a guided panel step (the filler must
-    // be attached first), so a bench click never fills the pipette by itself.
-    setSelectedApparatusKey("pipette");
-  }, [setSelectedApparatusKey]);
+  const handleAliquotVesselClick = useCallback(() => {
+    // Selecting only: measuring the solution is a guided panel step, so a bench
+    // click never fills the ware by itself.
+    setSelectedApparatusKey(stage?.portion.kind === "pipetted_volume" ? stage.portion.vessel : null);
+  }, [setSelectedApparatusKey, stage]);
 
   const handleBuretteSelect = useCallback(() => {
     setSelectedApparatusKey("burette");
@@ -142,10 +143,12 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
     );
   }
 
-  // Discarded trials across every stage: overshot solutions go to waste, so the
-  // waste level is drawn from the persisted trials, never invented.
+  // Discarded trials across every stage: overshot solutions and completed
+  // trials poured off go to waste, so the waste level is drawn from the
+  // persisted trials and waste-disposal counts, never invented.
   const discardedTotal = model.stages.reduce(
-    (total, entry) => total + entry.concordance.discardedTrials.length,
+    (total, entry) =>
+      total + entry.concordance.discardedTrials.length + entry.preparationState.wasteDiscards,
     0,
   );
 
@@ -228,19 +231,32 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
             }
           />
 
-          {/* Pipette in its rack */}
-          <PipetteRackSvg x={400} y={556} />
-          <PipetteSvg
-            nominalVolumeMl={
-              stage.portion.kind === "pipetted_volume" ? stage.portion.nominalVolumeMl : null
-            }
-            stage={pipetteStage}
-            fillerAttached={fillerAttached}
-            selected={selectedApparatusKey === "pipette"}
-            x={414}
-            y={400}
-            onSelect={interactive ? handlePipetteClick : undefined}
-          />
+          {/* The aliquot ware the PROCEDURE names: a measuring cylinder here, a
+              pipette for a configuration that calls for one. */}
+          {stage.portion.kind === "pipetted_volume" && stage.portion.vessel === "pipette" ? (
+            <>
+              <PipetteRackSvg x={400} y={556} />
+              <PipetteSvg
+                nominalVolumeMl={stage.portion.nominalVolumeMl}
+                stage={aliquotStage}
+                fillerAttached={fillerAttached}
+                selected={selectedApparatusKey === "pipette"}
+                x={414}
+                y={400}
+                onSelect={interactive ? handleAliquotVesselClick : undefined}
+              />
+            </>
+          ) : null}
+          {stage.portion.kind === "pipetted_volume" && stage.portion.vessel === "graduated_cylinder" ? (
+            <GraduatedCylinderSvg
+              nominalVolumeMl={stage.portion.nominalVolumeMl}
+              stage={aliquotStage}
+              selected={selectedApparatusKey === "graduated_cylinder"}
+              x={412}
+              y={392}
+              onSelect={interactive ? handleAliquotVesselClick : undefined}
+            />
+          ) : null}
 
           <BeakerSvg x={490} y={564} fillFraction={0} />
           {interactive ? (

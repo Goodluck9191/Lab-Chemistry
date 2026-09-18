@@ -2,15 +2,28 @@ import { exp02TitrationConfig } from "@/domain/experiments/catalog/exp-02-titrat
 import {
   addIndicator,
   addTitrant,
+  clearAirBubble,
   completeTrial,
+  conditionBurette,
   createTitrationSession,
+  discardToWaste,
+  diluteWorkingSolution,
+  dissolveKhp,
+  measureStockVolume,
+  mixWorkingSolution,
+  obtainTitrantPortion,
   pipetteAnalyte,
+  placeFlask,
   readBurette,
   reportMolarity,
+  rinseBeaker,
+  rinseBurette,
   setupApparatus,
   startTrialAction,
   toPublicJSON,
+  transferSolution,
   weighAnalyte,
+  weighBeakerMass,
   type TitrationPublicState,
   type TitrationSession,
 } from "@/domain/simulation/titration/engine";
@@ -39,8 +52,38 @@ export function hiddenTruth(session: TitrationSession, stageKey: string) {
   return session.hidden.stages[stageKey];
 }
 
-/** Set the burette up with a chosen initial reading. */
+/**
+ * The volume of 2 M stock the fixtures "measure". It is what C1V1 = C2V2 would
+ * need for 100 mL of ~0.2 M, but nothing in the engine reads it: the working
+ * strength stays the configuration's nominal value plus hidden truth, so the
+ * fixtures do not smuggle a concentration in through the dilution.
+ */
+export const FIXTURE_STOCK_VOLUME_ML = 10;
+
+/**
+ * Part I, through the real engine functions: measure the stock, dilute it with
+ * distilled water and mix it. Idempotent, so a fixture may call it even when an
+ * earlier helper already prepared the solution.
+ */
+export function provisionWorkingSolution(session: TitrationSession, stageKey = STAGE_A): void {
+  const solution = session.public.solution;
+  if (solution.stockVolumeMl === null) {
+    expectOk(measureStockVolume(session, stageKey, FIXTURE_STOCK_VOLUME_ML));
+  }
+  if (!solution.diluted) expectOk(diluteWorkingSolution(session, stageKey));
+  if (!solution.mixed) expectOk(mixWorkingSolution(session, stageKey));
+}
+
+/**
+ * Set the burette up with a chosen initial reading, from a legitimately prepared
+ * bench: the working solution is made up and the beaker the burette is served
+ * from holds its portion, exactly as the procedure requires.
+ */
 export function setup(session: TitrationSession, stageKey = STAGE_A, initialReadingMl = 0): void {
+  provisionWorkingSolution(session, stageKey);
+  if (!session.public.stages[stageKey].preparation.beakerObtained) {
+    expectOk(obtainTitrantPortion(session, stageKey));
+  }
   setupApparatus(session, stageKey, "naoh", initialReadingMl);
 }
 
@@ -113,14 +156,89 @@ export function overshotStageASession(seed = DEFAULT_SEED): TitrationSession {
   return session;
 }
 
-/** A stage-B session prepared with a pipetted aliquot, ready to titrate. */
+/** A stage-B session prepared with a measured aliquot, ready to titrate. */
 export function stageBReadySession(seed = DEFAULT_SEED): TitrationSession {
   const session = freshSession(seed);
-  setupApparatus(session, STAGE_B, "naoh", 0);
+  setup(session, STAGE_B);
   pipetteAnalyte(session, STAGE_B, exp02TitrationConfig.stages[1].analytePortion.kind === "pipetted_volume"
     ? exp02TitrationConfig.stages[1].analytePortion.nominalVolumeMl
     : 25);
   addIndicator(session, STAGE_B, 3);
+  return session;
+}
+
+/**
+ * Run the full Experiment 2 preparation chain for Stage A through the REAL
+ * engine functions: burette cleaning and conditioning, fill, air-bubble
+ * removal, weighing by difference, dissolution, transfer, beaker rinses,
+ * indicator and flask placement. Afterwards trial 1 may start.
+ */
+export function provisionStageA(
+  session: TitrationSession,
+  { beakerMassG = 52.34, khpMassG = 0.6 }: { beakerMassG?: number; khpMassG?: number } = {},
+): void {
+  provisionWorkingSolution(session);
+  expectOk(rinseBurette(session, STAGE_A));
+  expectOk(obtainTitrantPortion(session, STAGE_A));
+  expectOk(conditionBurette(session, STAGE_A));
+  expectOk(conditionBurette(session, STAGE_A));
+  expectOk(conditionBurette(session, STAGE_A));
+  setup(session);
+  expectOk(clearAirBubble(session, STAGE_A));
+  expectOk(weighBeakerMass(session, STAGE_A, beakerMassG));
+  expectOk(weighBeakerMass(session, STAGE_A, round2(beakerMassG + khpMassG)));
+  expectOk(dissolveKhp(session, STAGE_A));
+  expectOk(transferSolution(session, STAGE_A));
+  expectOk(rinseBeaker(session, STAGE_A));
+  expectOk(rinseBeaker(session, STAGE_A));
+  expectOk(addIndicator(session, STAGE_A, 3));
+  expectOk(placeFlask(session, STAGE_A));
+}
+
+function expectOk(result: { ok: boolean; error?: string }): void {
+  if (!result.ok) throw new Error(`fixture preparation failed: ${result.error ?? "unknown"}`);
+}
+
+/**
+ * Full Stage B preparation: a fresh portion of the already-prepared working
+ * solution, cleaning, conditioning, fill, the measured aliquot, indicator and
+ * placement. Part I is attempt-level, so it is not repeated here.
+ */
+export function provisionStageB(session: TitrationSession): void {
+  expectOk(rinseBurette(session, STAGE_B));
+  expectOk(obtainTitrantPortion(session, STAGE_B));
+  expectOk(conditionBurette(session, STAGE_B));
+  expectOk(conditionBurette(session, STAGE_B));
+  expectOk(conditionBurette(session, STAGE_B));
+  setup(session, STAGE_B);
+  pipetteAnalyte(session, STAGE_B, 25);
+  expectOk(clearAirBubble(session, STAGE_B));
+  addIndicator(session, STAGE_B, 3);
+  expectOk(placeFlask(session, STAGE_B));
+}
+
+/**
+ * A session that performed the whole procedure: full Stage A preparation,
+ * three reported trials with discards, full Stage B preparation, three
+ * reported trials with discards. Submittable once the required observation is
+ * recorded.
+ */
+export function provisionedFullSession(seed = DEFAULT_SEED): TitrationSession {
+  const session = freshSession(seed);
+  provisionStageA(session);
+  const observableA = session.hidden.stages[STAGE_A].observableMl;
+  for (let trial = 1; trial <= 3; trial += 1) {
+    runTrial(session, { trialNumber: trial, deliveredMl: round2(observableA) });
+    reportMolarity(session, STAGE_A, trial, 0.1);
+    expectOk(discardToWaste(session, STAGE_A));
+  }
+  provisionStageB(session);
+  const observableB = session.hidden.stages[STAGE_B].observableMl;
+  for (let trial = 1; trial <= 3; trial += 1) {
+    runTrial(session, { trialNumber: trial, deliveredMl: round2(observableB), stageKey: STAGE_B });
+    reportMolarity(session, STAGE_B, trial, 0.2);
+    expectOk(discardToWaste(session, STAGE_B));
+  }
   return session;
 }
 
@@ -133,7 +251,7 @@ export function stageBReadySession(seed = DEFAULT_SEED): TitrationSession {
 export function concordantFullSession(seed = DEFAULT_SEED): TitrationSession {
   const session = concordantStageASession(seed);
   const observableB = session.hidden.stages[STAGE_B].observableMl;
-  setupApparatus(session, STAGE_B, "naoh", 0);
+  setup(session, STAGE_B);
   pipetteAnalyte(session, STAGE_B, 25);
   addIndicator(session, STAGE_B, 3);
   for (let trial = 1; trial <= 3; trial += 1) {

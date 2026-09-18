@@ -33,22 +33,30 @@ export function ApparatusTray({ initialState }: { initialState: LabStateView }) 
   const availability = selectionAvailability({ canWrite, pending });
   const disabled = !availability.available;
 
+  // Part I: the stock the working titrant is diluted from, offered only when the
+  // experiment actually dilutes one.
+  const stockKey = initialState.config.solutionDilution?.stockKey ?? null;
   const reagents = [
+    ...(stockKey ? [{ key: stockKey, role: "stock", required: true }] : []),
     { key: stage.titrantKey, role: "titrant", required: true },
     { key: stage.analyteKey, role: "analyte", required: true },
     { key: stage.indicator.key, role: "indicator", required: true },
     { key: "distilled_water", role: "solvent", required: true },
   ];
 
+  // The aliquot ware comes from the configuration, so the tray never offers a
+  // pipette for a procedure that specifies a measuring cylinder.
   const apparatus = [
     { key: `burette_${Math.round(stage.burette.capacityMl)}`, detail: `${stage.burette.capacityMl} mL, to ${stage.burette.graduationMl} mL` },
     { key: "conical_flask_250", detail: "titration vessel" },
     stage.portion.kind === "weighed_mass"
       ? { key: "analytical_balance", detail: `to ${stage.portion.precision} g` }
-      : { key: "pipette", detail: `${stage.portion.nominalVolumeMl} mL aliquot` },
+      : { key: stage.portion.vessel, detail: `${stage.portion.nominalVolumeMl} mL aliquot` },
     ...(stage.portion.kind === "weighed_mass"
       ? [{ key: "weighing_bottle", detail: "sample container" }]
-      : [{ key: "pipette_filler", detail: "never pipette by mouth" }]),
+      : stage.portion.vessel === "pipette"
+        ? [{ key: "pipette_filler", detail: "never pipette by mouth" }]
+        : [{ key: "beaker_250", detail: "receives the aliquot" }]),
     { key: "wash_bottle", detail: "distilled water rinsings" },
   ];
 

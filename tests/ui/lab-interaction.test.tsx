@@ -64,7 +64,7 @@ describe("selecting apparatus on the bench drives the action panel", () => {
 
     await user.click(screen.getByRole("button", { name: /burette body/i }));
 
-    expect(screen.getByText(/^Selected: Rinse, fill and clamp the burette$/)).toBeTruthy();
+    expect(screen.getByText(/^Selected: Prepare the burette$/)).toBeTruthy();
     expect(screen.getByText("In context")).toBeTruthy();
   });
 
@@ -84,7 +84,7 @@ describe("selecting apparatus on the bench drives the action panel", () => {
 
     screen.getByRole("button", { name: /burette body/i }).focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByText(/^Selected: Rinse, fill and clamp the burette$/)).toBeTruthy();
+    expect(screen.getByText(/^Selected: Prepare the burette$/)).toBeTruthy();
   });
 
   it("focuses the matching section for a reagent, the flask and the balance", async () => {

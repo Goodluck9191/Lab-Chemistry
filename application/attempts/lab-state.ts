@@ -162,14 +162,22 @@ function catalogNotices(
   const missingChemicals = new Set<string>();
   const missingApparatus = new Set<string>();
 
+  // Part I draws on a stock solution as well as the working titrant.
+  if (config.solutionDilution && !chemicalKeys.has(config.solutionDilution.stockKey)) {
+    missingChemicals.add(config.solutionDilution.stockKey);
+  }
+
   for (const stage of config.stages) {
     if (!chemicalKeys.has(stage.titrantKey)) missingChemicals.add(stage.titrantKey);
     if (!chemicalKeys.has(stage.analyteKey)) missingChemicals.add(stage.analyteKey);
+    // `vessel` is an apparatus key, so the check is exact: if the experiment
+    // does not list the ware its stage uses, the student is told.
+    const portion = stage.analytePortion;
     if (
-      stage.analytePortion.kind === "pipetted_volume" &&
-      !briefing.apparatus.some((item) => item.key.includes("pipette"))
+      portion.kind === "pipetted_volume" &&
+      !briefing.apparatus.some((item) => item.key === portion.vessel)
     ) {
-      missingApparatus.add("pipette");
+      missingApparatus.add(portion.vessel);
     }
   }
 

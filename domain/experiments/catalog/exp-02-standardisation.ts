@@ -2,13 +2,17 @@ import { experimentDefinitionSchema } from "../schema";
 import type { ExperimentDefinition } from "../types";
 
 /**
- * Sample experiment used by Stage 1 to verify the architecture end to end
- * (student sees it -> starts an attempt -> the attempt is stored).
+ * Experiment 2 catalog definition: ACID-BASE TITRATION — STANDARDIZATION OF
+ * ACID AND BASE SOLUTIONS (Parts I-III of the supplied practical procedure).
  *
- * CHEMISTRY NOTICE: every constant below is a plausible textbook value, not one
- * taken from the university practical manual. `accuracy: "assumed"` marks this
- * for verification against the manual. The titration engine and the hidden
- * per-attempt parameters are deliberately absent; they belong to a later stage.
+ * The procedure, chemicals and apparatus below mirror supabase/seed.sql by
+ * hand until the config-to-database seeder exists; the Phase 4.8 migration
+ * carries the same repair for databases seeded earlier.
+ *
+ * CHEMISTRY NOTICE: constants that the supplied procedure does not state
+ * (e.g. dilution volumes, cylinder size) are NOT invented here: quantities
+ * the source leaves unspecified stay out, and `accuracy: "assumed"` marks
+ * this for verification against the manual.
  */
 const definition = {
   id: "exp-02",
@@ -45,60 +49,232 @@ const definition = {
   procedure: [
     {
       stepNumber: 1,
-      title: "Rinse and fill the burette",
+      title: "Measure the 2 M NaOH stock",
       instruction:
-        "Rinse the burette with a little of the sodium hydroxide solution, fill it, and expel air bubbles from the tip.",
+        "Using a measuring cylinder, measure out the 2 M NaOH stock solution for dilution to approximately 0.2 M.",
       isRequired: true,
     },
     {
       stepNumber: 2,
-      title: "Record the initial reading",
+      title: "Dilute to approximately 0.2 M NaOH",
       instruction:
-        "Read the bottom of the meniscus against a light background and record the initial burette reading to two decimal places.",
+        "Transfer the measured stock to a clean flask and add distilled water to complete the dilution.",
       isRequired: true,
     },
     {
       stepNumber: 3,
-      title: "Weigh the primary standard",
+      title: "Swirl to mix",
       instruction:
-        "Weigh accurately, by difference, between 0.4 g and 0.6 g of dried potassium hydrogen phthalate into a clean conical flask.",
+        "Stopper the flask as much as possible and swirl to mix the contents thoroughly.",
       isRequired: true,
     },
     {
       stepNumber: 4,
-      title: "Dissolve the standard",
+      title: "Clean the burette",
       instruction:
-        "Dissolve the weighed KHP in about 50 mL of distilled water and swirl until the solution is clear.",
+        "Rinse the burette with several portions of about 10 mL tap water and drain.",
       isRequired: true,
     },
     {
       stepNumber: 5,
-      title: "Add the indicator",
-      instruction: "Add two to three drops of phenolphthalein indicator to the flask.",
+      title: "Obtain NaOH in a beaker",
+      instruction:
+        "Obtain about 120 mL of the prepared NaOH solution in a clean, dry 250 mL beaker and cover with a watch glass.",
       isRequired: true,
     },
     {
       stepNumber: 6,
-      title: "Titrate to the endpoint",
+      title: "Condition the burette",
       instruction:
-        "Titrate with sodium hydroxide, swirling continuously, until a pale pink colour persists for 30 seconds.",
+        "Rinse the burette with three portions of about 5 mL of the NaOH solution, draining each portion.",
       isRequired: true,
     },
     {
       stepNumber: 7,
-      title: "Record the final reading and repeat",
+      title: "Fill the burette",
       instruction:
-        "Record the final burette reading, then repeat the titration until three concordant titres are obtained.",
+        "Fill the burette with the prepared NaOH to slightly above the zero mark and clamp the burette vertically.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 8,
+      title: "Remove air bubbles",
+      instruction:
+        "Drain NaOH through the tip into a small beaker until no air bubbles remain.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 9,
+      title: "Record the initial burette reading",
+      instruction:
+        "Read the bottom of the meniscus to within ±0.02 mL and record the initial reading to two decimal places.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 10,
+      title: "Weigh the empty beaker",
+      instruction:
+        "Weigh a clean and dry 250 mL beaker on the analytical balance to ±0.01 g and record the mass.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 11,
+      title: "Add KHP and re-weigh",
+      instruction:
+        "Add about 0.6 g of dried KHP to the beaker and re-weigh to ±0.01 g. The sample mass is the difference of the two weighings.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 12,
+      title: "Dissolve the KHP",
+      instruction:
+        "Add about 30 mL distilled water to the beaker and stir with a glass rod until the solution is clear.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 13,
+      title: "Transfer to the Erlenmeyer flask",
+      instruction:
+        "Transfer the KHP solution into a clean 250 mL Erlenmeyer flask.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 14,
+      title: "Rinse the beaker twice",
+      instruction:
+        "Rinse the beaker twice with about 5 mL distilled water, transferring each rinse into the flask.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 15,
+      title: "Add phenolphthalein",
+      instruction:
+        "Add 3 to 4 drops of phenolphthalein indicator to the flask.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 16,
+      title: "Place the flask under the burette",
+      instruction:
+        "Place the flask on the white tile, aligned under the burette tip.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 17,
+      title: "Titrate with swirling",
+      instruction:
+        "Add NaOH from the burette with continuous swirling until a faint pink colour appears.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 18,
+      title: "Observe the endpoint",
+      instruction:
+        "The faint pink must persist 45 to 60 seconds, with a one-drop difference between colourless and pink. An overshot endpoint is discarded and repeated.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 19,
+      title: "Record the final burette reading",
+      instruction:
+        "Read the bottom of the meniscus to within ±0.02 mL and record the final reading to two decimal places.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 20,
+      title: "Discard into the waste container",
+      instruction:
+        "Discard the flask contents into the waste container so the next trial starts clean.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 21,
+      title: "Repeat the titration",
+      instruction:
+        "Repeat for three trials. Perform a fourth titration if the calculated molarities vary by more than 0.005 M.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 22,
+      title: "Calculate the NaOH molarity",
+      instruction:
+        "Calculate the NaOH molarity for each valid trial and average the two closest values.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 23,
+      title: "Refill and zero the burette",
+      instruction:
+        "Refill the burette with the standardized NaOH and prepare it for the HCl determination.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 24,
+      title: "Record the initial NaOH reading",
+      instruction:
+        "Read the bottom of the meniscus to within ±0.02 mL and record to two decimal places.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 25,
+      title: "Measure the HCl aliquot",
+      instruction:
+        "Using the measuring cylinder, transfer approximately 25.00 mL of the unknown HCl solution into a clean, dry flask.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 26,
+      title: "Record the HCl volume",
+      instruction:
+        "Record the actual delivered HCl volume, known to two decimal places.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 27,
+      title: "Add phenolphthalein to the HCl",
+      instruction:
+        "Add 3 to 4 drops of phenolphthalein indicator to the flask.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 28,
+      title: "Titrate the HCl to the endpoint",
+      instruction:
+        "Place the flask under the NaOH burette and titrate with swirling to the faint pink endpoint.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 29,
+      title: "Record the final NaOH reading",
+      instruction:
+        "Read the bottom of the meniscus to within ±0.02 mL and record to two decimal places.",
+      isRequired: true,
+    },
+    {
+      stepNumber: 30,
+      title: "Discard, repeat and calculate HCl",
+      instruction:
+        "Discard into waste. Repeat for three trials (a fourth if the spread exceeds 0.005 M), average the two closest HCl molarities, and note the measurement uncertainties.",
       isRequired: true,
     },
   ],
   chemicals: [
     {
       key: "naoh",
-      name: "Sodium hydroxide solution",
+      name: "Sodium hydroxide working solution (~0.2 M)",
       formula: "NaOH",
       role: "titrant",
-      concentration: 0.1,
+      concentration: 0.2,
+      concentrationUnit: "mol/L",
+      hazardCodes: ["H290", "H314"],
+      isRequired: true,
+    },
+    {
+      key: "naoh_stock_2m",
+      name: "Sodium hydroxide stock solution (2 M)",
+      formula: "NaOH",
+      role: "reagent",
+      concentration: 2,
       concentrationUnit: "mol/L",
       hazardCodes: ["H290", "H314"],
       isRequired: true,
@@ -122,10 +298,26 @@ const definition = {
       isRequired: true,
     },
     {
+      key: "hcl_unknown",
+      name: "Unknown hydrochloric acid solution",
+      formula: "HCl",
+      role: "analyte",
+      hazardCodes: [],
+      isRequired: true,
+    },
+    {
       key: "distilled_water",
       name: "Distilled water",
       formula: "H2O",
       role: "solvent",
+      hazardCodes: [],
+      isRequired: true,
+    },
+    {
+      key: "tap_water",
+      name: "Tap water",
+      formula: "H2O",
+      role: "wash",
       hazardCodes: [],
       isRequired: true,
     },
@@ -147,6 +339,11 @@ const definition = {
     { key: "weighing_bottle", name: "Weighing bottle", isRequired: true },
     { key: "analytical_balance", name: "Analytical balance (0.1 mg)", isRequired: true },
     { key: "wash_bottle", name: "Wash bottle", isRequired: true },
+    { key: "beaker_250", name: "Beaker, 250 mL", capacityMl: 250, isRequired: true },
+    { key: "glass_rod", name: "Glass stirring rod", isRequired: true },
+    { key: "watch_glass", name: "Watch glass", isRequired: true },
+    { key: "graduated_cylinder", name: "Graduated cylinder", isRequired: true },
+    { key: "waste_container", name: "Waste container", isRequired: true },
   ],
   calculations: [
     {

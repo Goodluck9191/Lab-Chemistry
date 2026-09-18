@@ -3,11 +3,10 @@ import { exp02TitrationConfig } from "@/domain/experiments/catalog/exp-02-titrat
 import { recordObservation, toPublicJSON } from "@/domain/simulation/titration/engine";
 import { projectExperimentWorkflow } from "@/domain/simulation/titration/workflow";
 import {
-  concordantFullSession,
   concordantStageASession,
   freshSession,
-  prepareStageA,
-  setup,
+  provisionedFullSession,
+  provisionStageA,
   STAGE_A,
   STAGE_B,
 } from "../helpers/titration-fixtures";
@@ -65,22 +64,47 @@ describe("projectExperimentWorkflow", () => {
       toPublicJSON(freshSession()),
     );
     const keys = workflow.stages[0].requirements.map((requirement) => requirement.key);
-    expect(keys).toEqual(["prepare", "trials", "report", "concordance"]);
+    // Part I leads the list: the working solution is prepared before any burette
+    // work, and it is shown once, on the stage it unblocks.
+    expect(keys).toEqual([
+      "prepare_solution",
+      "prepare_burette",
+      "prepare_sample",
+      "prepare_flask",
+      "trials",
+      "report",
+      "concordance",
+    ]);
     expect(workflow.stages[0].requirements.every((requirement) => !requirement.done)).toBe(true);
+    expect(workflow.stages[1].requirements.map((requirement) => requirement.key)).toEqual([
+      "prepare_burette",
+      "prepare_sample",
+      "prepare_flask",
+      "trials",
+      "report",
+      "concordance",
+    ]);
+    expect(workflow.blockers.some((blocker) => /working solution/i.test(blocker))).toBe(true);
   });
 
-  it("marks preparation done after setup, weighing and indicator", () => {
+  it("marks preparation done after the full preparation chain", () => {
     const session = freshSession();
-    setup(session);
-    prepareStageA(session);
+    provisionStageA(session);
     const workflow = projectExperimentWorkflow(exp02TitrationConfig, toPublicJSON(session));
-    const [prepare, trials] = workflow.stages[0].requirements;
-    expect(prepare.done).toBe(true);
-    expect(trials.done).toBe(false);
+    const groups = Object.fromEntries(
+      workflow.stages[0].requirements.map((requirement) => [requirement.key, requirement.done]),
+    );
+    expect(groups).toMatchObject({
+      prepare_solution: true,
+      prepare_burette: true,
+      prepare_sample: true,
+      prepare_flask: true,
+      trials: false,
+    });
   });
 
   it("blocks submission while a recorded trial is unreported", () => {
-    const session = concordantFullSession();
+    const session = provisionedFullSession();
     // Simulate a trial recorded but never reported: clear the per-trial value
     // and drop one entry from the aggregate the concordance was built from.
     const stage = session.public.stages[STAGE_B];
@@ -99,7 +123,7 @@ describe("projectExperimentWorkflow", () => {
   it("blocks submission while a required observation is missing", () => {
     const workflow = projectExperimentWorkflow(
       exp02TitrationConfig,
-      toPublicJSON(concordantFullSession()),
+      toPublicJSON(provisionedFullSession()),
       REQUIRED_OBSERVATION,
     );
 
@@ -110,7 +134,7 @@ describe("projectExperimentWorkflow", () => {
   });
 
   it("allows submission when every stage is concordant, reported and observed", () => {
-    const session = concordantFullSession();
+    const session = provisionedFullSession();
     expect(
       recordObservation(session, STAGE_A, "colour_change", "Colourless to a faint pink that persists.").ok,
     ).toBe(true);

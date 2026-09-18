@@ -1,13 +1,17 @@
+import type { AliquotStage } from "./graduated-cylinder-svg";
+
 /**
- * Pipette with its filler.
+ * Pipette with its filler — drawn when a configuration names a PIPETTE as the
+ * aliquot vessel. Experiment 2's procedure specifies a measuring cylinder, so
+ * its bench shows the cylinder instead; the drawing stays because the engine
+ * supports either vessel.
  *
  * `stage` and `fillerAttached` are UI-only progress: "resting" (in the rack),
- * "filled" (solution drawn up) and "delivered" (emptied into the flask), plus
+ * "measured" (solution drawn up) and "delivered" (emptied into the flask), plus
  * whether the filler sits on the pipette. The volume shown is the configured
  * aliquot size, and the value that reaches the server is still the reading the
  * student enters — the drawing never becomes the source of truth.
  */
-export type PipetteStage = "resting" | "filled" | "delivered";
 
 export function PipetteSvg({
   nominalVolumeMl,
@@ -24,7 +28,7 @@ export function PipetteSvg({
    * invented in the drawing.
    */
   nominalVolumeMl: number | null;
-  stage: PipetteStage;
+  stage: AliquotStage;
   /** UI-only: whether the filler is seated on the pipette. */
   fillerAttached?: boolean;
   selected?: boolean;
@@ -36,7 +40,7 @@ export function PipetteSvg({
   const bodyBottom = 168;
   const bulbTop = 0;
   const liquidTop = bodyTop + 10;
-  const filled = stage === "filled";
+  const filled = stage === "measured";
 
   return (
     <g transform={`translate(${x}, ${y})`}>

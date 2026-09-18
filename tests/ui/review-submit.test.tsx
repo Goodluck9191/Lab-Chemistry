@@ -8,9 +8,9 @@ import { recordObservation } from "@/domain/simulation/titration/engine";
 import { labStateViewFor } from "../helpers/lab-fixture";
 import { renderLabPanels } from "../helpers/lab-render";
 import {
-  concordantFullSession,
   concordantStageASession,
   freshSession,
+  provisionedFullSession,
   STAGE_A,
 } from "../helpers/titration-fixtures";
 
@@ -107,7 +107,7 @@ describe("review and submit panel (jsdom)", () => {
 
   it("marks the finished experiment ready and submits it", async () => {
     const user = userEvent.setup();
-    const session = concordantFullSession();
+    const session = provisionedFullSession();
     expect(recordObservation(session, STAGE_A, "colour_change", "Faint pink persists.").ok).toBe(
       true,
     );

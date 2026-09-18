@@ -8,6 +8,7 @@ import { ControlReason, describedBy } from "./control-reason";
 import {
   completionAvailability,
   deliveryAvailability,
+  discardAvailability,
   observationAvailability,
   readingAvailability,
   startTrialAvailability,
@@ -66,7 +67,46 @@ export function TitrationControls() {
           <StartTrialControl stageKey={stage.key} trialNumber={stage.nextTrialNumber} />
         </div>
       ) : null}
+      <DiscardSection />
     </section>
+  );
+}
+
+/**
+ * Discard the completed trial's solution into the waste container. The next
+ * trial cannot start until this runs, so the disposal the manual requires is
+ * an action, not a silent reset.
+ */
+export function DiscardSection() {
+  const stage = useActiveStage();
+  const { perform, pending, canWrite } = useLabServer();
+  const uid = useId();
+  const reasonId = `${uid}-discard-reason`;
+
+  if (!stage || stage.trials.length === 0 || stage.preparationState.lastTrialDiscarded) {
+    return null;
+  }
+
+  const availability = discardAvailability(stage, { canWrite, pending });
+
+  return (
+    <div className="rounded-md border border-line px-3 py-3">
+      <p className="text-sm font-medium">Discard into the waste container</p>
+      <p className="mt-1 text-xs text-muted">
+        Pour the flask contents into waste so the next trial starts with a clean flask.
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          disabled={!availability.available}
+          aria-describedby={describedBy(reasonId, availability)}
+          onClick={() => void perform({ type: "discard_to_waste", stageKey: stage.key })}
+        >
+          Discard into waste
+        </Button>
+      </div>
+      <ControlReason id={reasonId} reason={availability.reason} className="mt-1" />
+    </div>
   );
 }
 
@@ -225,6 +265,11 @@ export function ObserveSection() {
       <p className="flex items-center gap-2 text-sm font-medium">
         <Eye aria-hidden="true" className="size-4 text-muted" />
         Record what you observe
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        The faint pink of the endpoint must persist {stage.indicator.persistenceSeconds[0]} to{" "}
+        {stage.indicator.persistenceSeconds[1]} seconds before you record it. Judge the colour
+        yourself; the laboratory does not tell you the endpoint.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         {(["colourless", "faint_pink", "pink", "deep_pink"] as const).map((colour) => (

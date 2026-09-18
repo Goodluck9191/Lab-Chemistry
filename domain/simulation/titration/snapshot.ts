@@ -17,15 +17,16 @@ import {
 import type { AttemptSecrets } from "@/domain/simulation/secrets";
 import type { TitrationExperimentConfig } from "./config";
 import {
+  emptyPreparation,
+  emptyWorkingSolution,
   projectPublicState,
-  type StageConcordance,
   type StageSession,
   type TitrationPublicState,
   type TitrationSession,
   type TitrationSessionState,
 } from "./engine";
 import { measurementRowsFor, trialRowFor } from "./persistence";
-import { titrationPublicStateSchema } from "./schema";
+import { titrationPublicStateSchema, type StoredStageSession } from "./schema";
 
 // ---------------------------------------------------------------------------
 // Secrets serialisation
@@ -169,11 +170,25 @@ export function snapshotFromSession(session: TitrationSession): SimulationState 
   };
 }
 
-/** Strip the derived concordance a stage may carry in the persisted document. */
-function toSessionStage(stage: StageSession & { concordance?: StageConcordance }): StageSession {
-  const copy: StageSession & { concordance?: StageConcordance } = { ...stage };
-  delete copy.concordance;
-  return copy;
+/**
+ * Strip the derived concordance a stage may carry in the persisted document.
+ * Preparation is handled by the caller, which normalises a missing value to
+ * the empty preparation (snapshots written before it existed still resume).
+ */
+function toSessionStage(stage: StoredStageSession): Omit<StageSession, "preparation"> {
+  return {
+    phase: stage.phase,
+    apparatusReady: stage.apparatusReady,
+    indicatorDrops: stage.indicatorDrops,
+    analyteMassG: stage.analyteMassG,
+    analyteVolumeMl: stage.analyteVolumeMl,
+    buretteInitialMl: stage.buretteInitialMl,
+    deliveredSoFarMl: stage.deliveredSoFarMl,
+    flaskColour: stage.flaskColour,
+    trials: stage.trials,
+    reportedMolaritiesM: stage.reportedMolaritiesM,
+    openTrial: stage.openTrial,
+  };
 }
 
 /** Rebuild a resumable engine session. Throws on missing/corrupt data. */
@@ -192,12 +207,20 @@ export function resumeSessionFromSnapshot(
   const stored = parsed.titration;
   const stages: Record<string, StageSession> = {};
   for (const [key, stage] of Object.entries(stored.stages)) {
-    stages[key] = toSessionStage(stage);
+    stages[key] = {
+      ...toSessionStage(stage),
+      // Snapshots written before preparation existed resume as unprepared;
+      // every stage gets its own object, never a shared default.
+      preparation: stage.preparation ?? emptyPreparation(),
+    };
   }
   const publicState: TitrationSessionState = {
     schemaVersion: stored.schemaVersion,
     experimentNumber: stored.experimentNumber,
     stages,
+    // A snapshot written before the Part I dilution steps existed resumes at
+    // the start of Part I rather than failing to load.
+    solution: stored.solution ?? emptyWorkingSolution(),
     errorEvents: JSON.parse(JSON.stringify(stored.errorEvents)) as TitrationSessionState["errorEvents"],
     completedTrials: stored.completedTrials,
     observations: JSON.parse(JSON.stringify(stored.observations)) as TitrationSessionState["observations"],

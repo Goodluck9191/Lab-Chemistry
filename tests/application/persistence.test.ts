@@ -107,6 +107,7 @@ describe("persistence repositories (offline fake)", () => {
     const ids = await syncTrialRows(client, ATTEMPT_ID, [
       {
         trialNumber: 1,
+        stageKey: "stage-a-khp-naoh",
         status: "recorded",
         initialReading: 0,
         finalReading: 14.5,
@@ -118,6 +119,8 @@ describe("persistence repositories (offline fake)", () => {
     expect(ids.get(1)).toBe("trial-uuid-1");
     const upsert = calls.find((c) => c.op === "upsert");
     expect(upsert?.table).toBe("experiment_trials");
+    const payload = upsert?.payload as { payload: Array<Record<string, unknown>> };
+    expect(payload.payload[0].stage_key).toBe("stage-a-khp-naoh");
   });
 
   it("appends only measurements whose label is not stored yet", async () => {

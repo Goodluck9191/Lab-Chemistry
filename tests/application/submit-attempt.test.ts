@@ -13,8 +13,8 @@ import {
 import { submitBlockersFor } from "@/application/attempts/submit-attempt";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  concordantFullSession,
   freshSession,
+  provisionedFullSession,
   STAGE_A,
 } from "../helpers/titration-fixtures";
 
@@ -80,7 +80,7 @@ describe("submit gate", () => {
   });
 
   it("clears once every stage is concordant, reported and observed", () => {
-    const session = concordantFullSession();
+    const session = provisionedFullSession();
     expect(
       recordObservation(session, STAGE_A, "colour_change", "Colourless to persistent faint pink.")
         .ok,
