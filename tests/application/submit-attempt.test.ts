@@ -127,23 +127,30 @@ describe("report repositories (offline fake)", () => {
     await upsertReportDraft(client, ATTEMPT_ID, sections);
     const upsert = calls.find((c) => c.op === "upsert");
     expect(upsert?.table).toBe("reports");
-    const payload = upsert?.payload as { payload: Record<string, unknown>; opts: unknown };
-    expect(payload.payload).toMatchObject({ attempt_id: ATTEMPT_ID, status: "draft" });
-    expect(payload.payload).not.toHaveProperty("submitted_at");
-    expect(payload.opts).toMatchObject({ onConflict: "attempt_id" });
+    const inserted = (upsert?.payload as { payload: Array<Record<string, unknown>> }).payload;
+    expect(inserted[0]).toMatchObject({ attempt_id: ATTEMPT_ID, status: "draft" });
+    expect(inserted[0]).not.toHaveProperty("submitted_at");
+    expect((upsert?.payload as { opts: unknown }).opts).toMatchObject({
+      onConflict: "attempt_id",
+      ignoreDuplicates: true,
+    });
+    // The row's identity is written once, never updated: `attempt_id` is not a
+    // column the student's role may update.
+    const update = calls.find((c) => c.op === "update");
+    expect((update?.payload as Record<string, unknown>)).not.toHaveProperty("attempt_id");
   });
 
   it("freezes the report with the readings snapshot and a submission time", async () => {
     const { client, calls } = fakeClient([ok([])]);
     await submitReportForAttempt(client, ATTEMPT_ID, sections, { schemaVersion: 1 });
     const upsert = calls.find((c) => c.op === "upsert");
-    const payload = upsert?.payload as { payload: Record<string, unknown> };
-    expect(payload.payload).toMatchObject({
+    const inserted = (upsert?.payload as { payload: Array<Record<string, unknown>> }).payload;
+    expect(inserted[0]).toMatchObject({
       attempt_id: ATTEMPT_ID,
       status: "submitted",
       readings_snapshot: { schemaVersion: 1 },
     });
-    expect(typeof payload.payload.submitted_at).toBe("string");
+    expect(typeof inserted[0].submitted_at).toBe("string");
   });
 
   it("marks the attempt submitted with only the permitted columns", async () => {

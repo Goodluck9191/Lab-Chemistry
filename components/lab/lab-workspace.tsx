@@ -81,7 +81,7 @@ function LabWorkspaceBody({
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* LEFT: Procedure sidebar (desktop only) */}
         <div className="hidden lg:flex">
-          <ProcedurePanel procedure={initialState.procedure} />
+          <ProcedurePanel procedure={initialState.procedure} initialState={initialState} />
         </div>
 
         {/* CENTER: Virtual laboratory — this must dominate */}
@@ -97,7 +97,7 @@ function LabWorkspaceBody({
           {/* Mobile: procedure below the lab */}
           <div className="lg:hidden">
             <div className="border-t border-line bg-surface">
-              <ProcedurePanel procedure={initialState.procedure} />
+              <ProcedurePanel procedure={initialState.procedure} initialState={initialState} />
             </div>
           </div>
 
@@ -147,7 +147,7 @@ function LabWorkspaceBody({
         </div>
 
         {/* RIGHT: Action panel (desktop only) */}
-        <aside className="hidden w-72 shrink-0 flex-col overflow-y-auto border-l border-line bg-surface xl:w-80 xl:flex">
+        <aside className="hidden w-72 shrink-0 flex-col overflow-y-auto border-l border-line bg-surface lg:flex xl:w-80">
           {/* Apparatus tray */}
           <div className="border-b border-line px-3 py-3">
             <ApparatusTray initialState={initialState} />

@@ -31,6 +31,7 @@ import { deriveHiddenState, type AttemptHiddenState } from "./hidden";
 import { classifyReadingError } from "./reading";
 import {
   averageTwoClosest,
+  closestPairSpread,
   evaluateConcordanceForRules,
   evaluateMolarityConcordance,
   startTrial,
@@ -1136,6 +1137,30 @@ export function projectStageConcordance(
       ? stage.reportedMolaritiesM.length >= rules.minTrials
       : recorded.length >= rules.minTrials;
 
+  // Manual fourth-trial rule: when the first three reported molarities disagree
+  // (spread > 0.005 M) the student performs a fourth titration and the result
+  // is the average of the TWO CLOSEST values. Judging all four by the full
+  // spread would leave a careful fourth trial unable to ever complete the
+  // stage, so at the recorded-trial ceiling the gate uses the closest-pair
+  // spread — the same pair the reported average comes from.
+  let spread: number | null = Number.isFinite(result.spread) ? result.spread : null;
+  let concordant = result.concordant && enoughEvidence;
+  let detail = result.detail;
+  if (
+    concordanceRules.mode === "molarity" &&
+    recorded.length >= rules.maxTrials &&
+    recorded.length > rules.minTrials
+  ) {
+    const pairSpread = closestPairSpread(stage.reportedMolaritiesM);
+    spread = pairSpread;
+    concordant =
+      pairSpread !== null && pairSpread <= concordanceRules.maxSpreadM + 1e-12;
+    detail =
+      pairSpread === null
+        ? result.detail
+        : `fourth trial recorded: closest pair spread ${pairSpread} mol/L vs allowed ${concordanceRules.maxSpreadM} mol/L; the result is the average of the two closest values`;
+  }
+
   return {
     mode: concordanceRules.mode,
     requiredTrials: rules.minTrials,
@@ -1143,16 +1168,16 @@ export function projectStageConcordance(
     recordedTrials: recorded.length,
     discardedTrials: discarded,
     reportedMolaritiesM: [...stage.reportedMolaritiesM],
-    spread: Number.isFinite(result.spread) ? result.spread : null,
+    spread,
     allowedSpread,
     spreadUnit,
-    concordant: result.concordant && enoughEvidence,
+    concordant,
     averageMolarityM:
       concordanceRules.mode === "molarity" && stage.reportedMolaritiesM.length > 0
         ? averageTwoClosest(stage.reportedMolaritiesM)
         : null,
     trialsStillNeeded: Math.max(0, rules.minTrials - recorded.length),
-    detail: result.detail,
+    detail,
   };
 }
 

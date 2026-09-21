@@ -78,6 +78,12 @@ const config = {
       stoichiometry: { analyteCoefficient: 1, titrantCoefficient: 1 }, // [STANDARD]
       titrantKey: "naoh",
       analyteKey: "hcl",
+      // The catalog holds the analyte as its inventory row `hcl_unknown`
+      // ("Unknown hydrochloric acid solution", concentration deliberately NULL).
+      // `hcl` is the chemistry key the engine works with; the catalog key is what
+      // the briefing must list. Stating the binding keeps the coverage check
+      // honest instead of comparing two different vocabularies.
+      catalog: { analyteKey: "hcl_unknown" },
       analytePortion: {
         kind: "pipetted_volume",
         nominalVolumeMl: 25.0, // [MANUAL] "approximately 25.00 mL of HCl"

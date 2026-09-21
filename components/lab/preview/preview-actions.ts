@@ -37,7 +37,9 @@ const requestSchema = z.object({
 });
 
 function rejected(code: string, message: string): LabActionOutcome {
-  return { status: "rejected", code, message };
+  // The preview harness has no storage behind it, so there is never a driver
+  // message to report; `detail` stays null exactly as it does in production.
+  return { status: "rejected", code, message, detail: null };
 }
 
 /** Load one scenario from its seed. Used by the switcher and the reset control. */

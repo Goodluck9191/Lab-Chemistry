@@ -113,6 +113,23 @@ export const analytePortionSchema = z.discriminatedUnion("kind", [
 ]);
 export type AnalytePortionConfig = z.infer<typeof analytePortionSchema>;
 
+/**
+ * The PUBLIC CATALOG's reagent keys for the reagents a stage consumes, when they
+ * differ from the simulation's own chemical keys.
+ *
+ * WHY TWO VOCABULARIES: the catalog is an inventory — `hcl_unknown`, "unknown
+ * hydrochloric acid solution", concentration NULL — while the simulation is
+ * chemistry, where the analyte is just `hcl`. Both keys are correct for their own
+ * source, so a stage states which catalog reagent stands for its titrant and its
+ * analyte rather than the coverage check assuming the two match. Omitting it
+ * means the keys are the same, which is the ordinary case.
+ */
+export const stageCatalogBindingSchema = z.object({
+  titrantKey: z.string().min(1).max(64).optional(),
+  analyteKey: z.string().min(1).max(64).optional(),
+});
+export type StageCatalogBinding = z.infer<typeof stageCatalogBindingSchema>;
+
 /** One titrand/titrant stage, e.g. "KHP vs NaOH" then "HCl vs NaOH". */
 export const titrationStageConfigSchema = z.object({
   key: z.string().min(1).max(64),
@@ -123,11 +140,26 @@ export const titrationStageConfigSchema = z.object({
   stoichiometry: stoichiometrySchema,
   titrantKey: z.string().min(1).max(64),
   analyteKey: z.string().min(1).max(64),
+  catalog: stageCatalogBindingSchema.optional(),
   analytePortion: analytePortionSchema,
   indicator: indicatorConfigSchema,
   burette: buretteConfigSchema,
 });
 export type TitrationStageConfig = z.infer<typeof titrationStageConfigSchema>;
+
+/**
+ * The catalog reagent keys a stage draws on, with the chemical keys as the
+ * default. One place resolves the fallback so every reader agrees.
+ */
+export function stageCatalogKeys(stage: TitrationStageConfig): {
+  titrantKey: string;
+  analyteKey: string;
+} {
+  return {
+    titrantKey: stage.catalog?.titrantKey ?? stage.titrantKey,
+    analyteKey: stage.catalog?.analyteKey ?? stage.analyteKey,
+  };
+}
 
 /**
  * Part I of a procedure that dilutes its own working titrant from a stock

@@ -258,6 +258,9 @@ describe("laboratory data panels (jsdom)", () => {
       status: "rejected" as const,
       code: "action_failed",
       message: "The action could not be saved. Check your connection and try again.",
+      // Development runs surface the driver's own message so a storage failure
+      // can be diagnosed; production sends null.
+      detail: "Failed to sync trial rows: permission denied for table experiment_trials",
     }));
     const loadState = vi.fn(async () => ({ status: "ok" as const, state }));
 
@@ -266,8 +269,17 @@ describe("laboratory data panels (jsdom)", () => {
     await user.type(screen.getByLabelText(/describe the colour change/i), "Pink");
     await user.click(screen.getByRole("button", { name: /save observation/i }));
 
-    await waitFor(() => expect(screen.getAllByText("Save failed").length).toBeGreaterThan(0));
-    expect(screen.getByText("The action was not saved")).toBeTruthy();
+    // ONE alert, and it says what actually happened — the failure used to be
+    // reported twice, with the cause in neither.
+    // The autosave indicator labels the state too, so the alert is asserted by
+    // its wording rather than by title alone.
+    await waitFor(() =>
+      expect(screen.getAllByText("Save failed").length).toBeGreaterThan(0),
+    );
+    expect(screen.getByText(/could not be saved/i)).toBeTruthy();
+    expect(screen.getByText(/last state the server confirmed/i)).toBeTruthy();
+    expect(screen.getByText(/permission denied for table experiment_trials/i)).toBeTruthy();
+    expect(screen.queryByText("The action was not saved")).toBeNull();
     await user.click(screen.getByRole("button", { name: /reload saved state/i }));
     await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1));
   });
@@ -304,6 +316,7 @@ describe("laboratory data panels (jsdom)", () => {
       status: "rejected" as const,
       code: "protocol_mismatch",
       message: "This page is out of date with the simulation protocol. Reload the laboratory to continue.",
+      detail: null,
     }));
 
     renderLabPanels({ state, send, panels: allPanels(state) });

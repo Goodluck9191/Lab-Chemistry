@@ -41,6 +41,14 @@ export interface LabActionRejected {
   status: "rejected";
   code: string;
   message: string;
+  /**
+   * Operator-facing cause of a real failure (e.g. "Failed to sync trial rows:
+   * permission denied for table experiment_trials"). NULL in production, so
+   * students only ever see `message`; a development run — which is where a
+   * misconfiguration is diagnosed — shows the cause instead of guessing.
+   * Never a hidden simulation value: it is a driver message, not a reading.
+   */
+  detail: string | null;
 }
 
 export type LabActionOutcome = LabActionOk | LabActionConflict | LabActionRejected;
@@ -70,6 +78,16 @@ const PROTOCOL_MESSAGE =
 
 const FAILURE_MESSAGE =
   "The action could not be saved. Check your connection and try again.";
+
+/**
+ * Reduce an unexpected error to one short line for the operator. Production gets
+ * none: a student cannot act on a driver message, and it can name internals.
+ */
+export function operatorDetail(error: unknown): string | null {
+  if (process.env.NODE_ENV === "production") return null;
+  if (!(error instanceof Error) || error.message.trim() === "") return null;
+  return error.message.replace(/\s+/g, " ").trim().slice(0, 300);
+}
 
 /** True for the framework's control-flow errors, which must never be swallowed. */
 export function isControlFlowError(error: unknown): boolean {
@@ -114,20 +132,35 @@ export async function runLabAction(
         };
       } catch (reloadError) {
         if (isControlFlowError(reloadError)) throw reloadError;
+        console.error("[lab] conflict reload failed", reloadError);
         return {
           status: "rejected",
           code: "conflict_reload_failed",
           message:
             "This attempt changed in another session, and the refreshed state could not be loaded. " +
             "Reload the laboratory to continue.",
+          detail: operatorDetail(reloadError),
         };
       }
     }
 
     if (error instanceof Error && error.message.includes("invalid simulation action")) {
-      return { status: "rejected", code: "protocol_mismatch", message: PROTOCOL_MESSAGE };
+      return {
+        status: "rejected",
+        code: "protocol_mismatch",
+        message: PROTOCOL_MESSAGE,
+        detail: operatorDetail(error),
+      };
     }
 
-    return { status: "rejected", code: "action_failed", message: FAILURE_MESSAGE };
+    // The student is told that nothing was stored; the server terminal is told
+    // why, so a storage failure is diagnosed rather than guessed at.
+    console.error("[lab] action failed", error);
+    return {
+      status: "rejected",
+      code: "action_failed",
+      message: FAILURE_MESSAGE,
+      detail: operatorDetail(error),
+    };
   }
 }

@@ -325,6 +325,7 @@ describe("the console narrates the experiment", () => {
       status: "rejected" as const,
       code: "action_failed",
       message: "The action could not be saved. Check your connection and try again.",
+      detail: null,
     }));
 
     renderLabPanels({

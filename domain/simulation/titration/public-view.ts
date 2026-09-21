@@ -17,6 +17,7 @@
  */
 import {
   maxTrialAttemptsFor,
+  stageCatalogKeys,
   type AnalytePortionConfig,
   type BuretteConfig,
   type IndicatorConfig,
@@ -52,6 +53,12 @@ export interface PublicStageView {
   stoichiometry: { analyteCoefficient: number; titrantCoefficient: number };
   titrantKey: string;
   analyteKey: string;
+  /**
+   * The public catalog's keys for this stage's reagents — what the briefing must
+   * list for the laboratory and the catalog to describe the same experiment.
+   * Equal to `titrantKey`/`analyteKey` unless the configuration maps them.
+   */
+  catalog: { titrantKey: string; analyteKey: string };
   analytePortion: AnalytePortionConfig;
   indicator: PublicIndicatorView;
   burette: PublicBuretteView;
@@ -124,6 +131,7 @@ function stageView(stage: TitrationStageConfig): PublicStageView {
     },
     titrantKey: stage.titrantKey,
     analyteKey: stage.analyteKey,
+    catalog: stageCatalogKeys(stage),
     analytePortion: { ...stage.analytePortion },
     indicator: indicatorView(stage.indicator),
     burette: buretteView(stage.burette),
