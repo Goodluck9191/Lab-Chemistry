@@ -10,11 +10,23 @@ import { exp02TitrationConfig } from "@/domain/experiments/catalog/exp-02-titrat
 import {
   addIndicator,
   addTitrant,
+  clearAirBubble,
+  conditionBurette,
+  diluteWorkingSolution,
+  dissolveKhp,
+  measureStockVolume,
+  mixWorkingSolution,
+  obtainTitrantPortion,
   observeEndpoint,
+  placeFlask,
   readBurette,
   reportMolarity,
+  rinseBeaker,
+  rinseBurette,
   startTrialAction,
+  transferSolution,
   weighAnalyte,
+  weighBeakerMass,
 } from "@/domain/simulation/titration/engine";
 import { toPublicJSON } from "@/domain/simulation/titration/engine";
 import {
@@ -23,6 +35,7 @@ import {
   freshSession,
   hiddenTruth,
   overshotStageASession,
+  provisionStageA,
   publicStateOf,
   runTrial,
   setup,
@@ -45,25 +58,55 @@ function viewFor(
 }
 
 describe("laboratory view model", () => {
-  it("starts a fresh attempt by asking for the burette, then the sample, then the indicator", () => {
+  it("walks a fresh attempt through the Experiment 2 preparation procedure", () => {
+    // Procedure order replaced the old setup-first guidance: Part I makes the
+    // working titrant, then cleaning, the portion, conditioning and filling come
+    // before weighing by difference, dissolution, transfer, rinses and
+    // placement.
     const session = freshSession();
-    expect(viewFor(session).stages[0].nextAction?.kind).toBe("setup_apparatus");
+    const nextKind = () => viewFor(session).stages[0].nextAction?.kind;
+
+    expect(nextKind()).toBe("measure_stock");
+    expect(measureStockVolume(session, STAGE_A, 10).ok).toBe(true);
+    expect(nextKind()).toBe("dilute_solution");
+    expect(diluteWorkingSolution(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("mix_solution");
+    expect(mixWorkingSolution(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("rinse_burette");
+    expect(rinseBurette(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("obtain_naoh_portion");
+    expect(obtainTitrantPortion(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("condition_burette");
+    expect(conditionBurette(session, STAGE_A).ok).toBe(true);
+    expect(conditionBurette(session, STAGE_A).ok).toBe(true);
+    expect(conditionBurette(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("setup_apparatus");
 
     setup(session);
-    expect(viewFor(session).stages[0].nextAction?.kind).toBe("weigh_analyte");
-
-    weighAnalyte(session, STAGE_A, 0.6);
-    expect(viewFor(session).stages[0].nextAction?.kind).toBe("add_indicator");
+    expect(nextKind()).toBe("clear_air_bubble");
+    expect(clearAirBubble(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("weigh_beaker");
+    expect(weighBeakerMass(session, STAGE_A, 52.34).ok).toBe(true);
+    expect(viewFor(session).stages[0].nextAction?.title).toContain("plus KHP");
+    expect(weighBeakerMass(session, STAGE_A, 52.94).ok).toBe(true);
+    expect(nextKind()).toBe("dissolve_khp");
+    expect(dissolveKhp(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("transfer_solution");
+    expect(transferSolution(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("rinse_beaker");
+    expect(rinseBeaker(session, STAGE_A).ok).toBe(true);
+    expect(rinseBeaker(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("add_indicator");
 
     addIndicator(session, STAGE_A, 3);
-    expect(viewFor(session).stages[0].nextAction?.kind).toBe("start_trial");
+    expect(nextKind()).toBe("place_flask");
+    expect(placeFlask(session, STAGE_A).ok).toBe(true);
+    expect(nextKind()).toBe("start_trial");
   });
 
   it("moves through titrating, reading, completing and reporting", () => {
     const session = freshSession();
-    setup(session);
-    weighAnalyte(session, STAGE_A, 0.6);
-    addIndicator(session, STAGE_A, 3);
+    provisionStageA(session);
     startTrialAction(session, STAGE_A, 1, 0);
 
     expect(viewFor(session).stages[0].nextAction?.kind).toBe("add_titrant");
@@ -82,9 +125,7 @@ describe("laboratory view model", () => {
 
   it("asks for the concentration once a trial is recorded but unreported", () => {
     const session = freshSession();
-    setup(session);
-    weighAnalyte(session, STAGE_A, 0.6);
-    addIndicator(session, STAGE_A, 3);
+    provisionStageA(session);
     runTrial(session, { trialNumber: 1, deliveredMl: hiddenTruth(session, STAGE_A).observableMl });
 
     const stage = viewFor(session).stages[0];
@@ -217,19 +258,58 @@ describe("laboratory view model", () => {
     const stage = viewFor(freshSession()).stages[0];
     const keys = stage.preparation.map((step) => step.key);
     expect(keys).toEqual([
+      "clean_burette",
+      "obtain_naoh_portion",
+      "condition_burette",
       "setup_apparatus",
-      "weigh_analyte",
+      "clear_air_bubble",
+      "weigh_beaker",
+      "dissolve_khp",
+      "transfer_solution",
+      "rinse_beaker",
       "add_indicator",
+      "place_flask",
       "titrate",
       "concordance",
     ]);
-    expect(stage.preparation[0].requires).toContain("Sodium hydroxide solution");
-    expect(stage.preparation[1].detail).toContain("0.6 g");
+    expect(stage.preparation[2].requires).toContain("Sodium hydroxide solution");
+    expect(stage.preparation[5].detail).toContain("0.6 g");
     expect(stage.preparation[0].current).toBe(true);
     expect(stage.preparation[0].done).toBe(false);
   });
 
-  it("asks for the pipette on a pipetted stage and never offers a balance", () => {
+  it("projects Part I from the persisted working solution, ahead of every stage", () => {
+    const session = freshSession();
+    const step = () => viewFor(session).solution;
+
+    expect(step().required).toBe(true);
+    expect(step().stockMolarityM).toBe(2);
+    expect(step().nominalWorkingMolarityM).toBeCloseTo(0.2, 5);
+    expect(step().steps.map((s) => s.key)).toEqual([
+      "measure_stock",
+      "dilute_solution",
+      "mix_solution",
+    ]);
+    expect(step().nextAction?.kind).toBe("measure_stock");
+    expect(step().blockers).toHaveLength(1);
+    // Part I is attempt-level, so every stage shows the same solution state.
+    expect(viewFor(session).stages[1].trialBlockers.find((b) => /stock solution/i.test(b))).toBeDefined();
+
+    expect(measureStockVolume(session, STAGE_A, 10).ok).toBe(true);
+    expect(step().nextAction?.kind).toBe("dilute_solution");
+    expect(step().steps[0].done).toBe(true);
+    // The measured volume is the student's own reading, never a target.
+    expect(step().stockVolumeMl).toBe(10);
+
+    expect(diluteWorkingSolution(session, STAGE_A).ok).toBe(true);
+    expect(step().nextAction?.kind).toBe("mix_solution");
+    expect(mixWorkingSolution(session, STAGE_A).ok).toBe(true);
+    expect(step().ready).toBe(true);
+    expect(step().nextAction).toBeNull();
+    expect(step().blockers).toEqual([]);
+  });
+
+  it("asks for the measuring cylinder on a measured-aliquot stage and never offers a balance", () => {
     const session = freshSession();
     const stageB = buildLabViewModel({
       config,
@@ -239,9 +319,14 @@ describe("laboratory view model", () => {
       selectedStageKey: "stage-b-hcl-naoh",
       canWrite: true,
     }).stages[1];
-    expect(stageB.preparation.map((step) => step.key)).toContain("pipette_analyte");
-    expect(stageB.preparation.map((step) => step.key)).not.toContain("weigh_analyte");
+    const keys = stageB.preparation.map((step) => step.key);
+    expect(keys).toContain("measure_analyte");
+    expect(keys).not.toContain("weigh_beaker");
     expect(stageB.portion.kind).toBe("pipetted_volume");
+    if (stageB.portion.kind !== "pipetted_volume") throw new Error("expected a measured aliquot");
+    // The supplied manual names a measuring cylinder for the 25.00 mL aliquot.
+    expect(stageB.portion.vessel).toBe("graduated_cylinder");
+    expect(stageB.preparation.find((step) => step.key === "measure_analyte")?.label).toMatch(/cylinder/i);
   });
 
   it("falls back to the raw key when the public catalog has no name", () => {

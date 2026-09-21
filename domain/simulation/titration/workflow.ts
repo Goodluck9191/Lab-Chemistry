@@ -17,7 +17,14 @@
  * Nothing hidden is read here: concordance, trials and observations are all
  * public. Stage letters (A, B, ...) are display labels derived from order.
  */
-import type { TitrationPublicState } from "./engine";
+import type { SolutionDilutionConfig } from "./config";
+import {
+  REQUIRED_BEAKER_RINSES,
+  REQUIRED_CONDITIONING_RINSES,
+  emptyWorkingSolution,
+  solutionPreparationBlockers,
+  type TitrationPublicState,
+} from "./engine";
 
 /** Minimal stage description; both the full config and the public view satisfy it. */
 export interface WorkflowStageInput {
@@ -28,6 +35,8 @@ export interface WorkflowStageInput {
 
 /** Minimal config description; both the full config and the public view satisfy it. */
 export interface WorkflowConfigInput {
+  /** Part I working-titrant dilution, or null when the titrant is ready-made. */
+  readonly solutionDilution: SolutionDilutionConfig | null;
   readonly stages: readonly WorkflowStageInput[];
 }
 
@@ -38,7 +47,14 @@ export interface WorkflowRequiredObservation {
 }
 
 export interface StageRequirement {
-  readonly key: "prepare" | "trials" | "report" | "concordance";
+  readonly key:
+    | "prepare_solution"
+    | "prepare_burette"
+    | "prepare_sample"
+    | "prepare_flask"
+    | "trials"
+    | "report"
+    | "concordance";
   readonly label: string;
   readonly done: boolean;
 }
@@ -90,8 +106,17 @@ function projectStage(
   index: number,
   publicState: TitrationPublicState,
   lockedBy: StageWorkflowStatus | null,
+  /**
+   * Part I requirement, attached to the FIRST stage only.
+   *
+   * The working solution belongs to the attempt, not to a stage, but the
+   * checklist is per stage: showing it once, ahead of the stage it unblocks,
+   * keeps one honest list instead of repeating the same blocker for every stage.
+   */
+  solutionRequirement: StageRequirement | null,
 ): StageWorkflowStatus {
   const session = publicState.stages[stageInput.key];
+  const prep = session?.preparation;
   const concordance = session?.concordance;
   const recorded = session?.trials.filter((trial) => trial.status === "recorded") ?? [];
   const unreported = recorded.filter((trial) => trial.reportedMolarityM === null);
@@ -99,17 +124,78 @@ function projectStage(
     stageInput.analytePortion.kind === "weighed_mass"
       ? session?.analyteMassG !== null && session?.analyteMassG !== undefined
       : session?.analyteVolumeMl !== null && session?.analyteVolumeMl !== undefined;
-  const prepared =
-    (session?.apparatusReady ?? false) && analyteReady && (session?.indicatorDrops ?? null) !== null;
+  const buretteReady =
+    (session?.apparatusReady ?? false) && (session?.buretteInitialMl ?? null) !== null;
   const requiredTrials = concordance?.requiredTrials ?? 0;
   const concordant = concordance?.concordant ?? false;
   const reportedTrials = recorded.length - unreported.length;
 
+  const buretteMissing: string[] = [];
+  if (!prep?.buretteCleaned) buretteMissing.push("clean the burette");
+  if ((prep?.conditioningRinses ?? 0) < REQUIRED_CONDITIONING_RINSES) {
+    buretteMissing.push(
+      `condition it (${prep?.conditioningRinses ?? 0} of ${REQUIRED_CONDITIONING_RINSES} rinses)`,
+    );
+  }
+  if (!buretteReady) buretteMissing.push("fill it and record the initial reading");
+  if (!prep?.airBubbleCleared) buretteMissing.push("clear the air bubble from the tip");
+
+  const sampleMissing: string[] = [];
+  if (stageInput.analytePortion.kind === "weighed_mass") {
+    if (prep?.beakerMassG === null || prep?.beakerMassG === undefined) {
+      sampleMissing.push("weigh the empty beaker");
+    }
+    if (prep?.beakerPlusKhpMassG === null || prep?.beakerPlusKhpMassG === undefined) {
+      sampleMissing.push("add KHP and weigh again");
+    }
+    if (!prep?.khpDissolved) sampleMissing.push("dissolve the KHP");
+    if (!prep?.khpTransferred) sampleMissing.push("transfer the solution to the flask");
+    if ((prep?.beakerRinses ?? 0) < REQUIRED_BEAKER_RINSES) {
+      sampleMissing.push(
+        `rinse the beaker (${prep?.beakerRinses ?? 0} of ${REQUIRED_BEAKER_RINSES} rinses)`,
+      );
+    }
+  } else if (!analyteReady) {
+    sampleMissing.push("measure the aliquot volume");
+  }
+
+  const flaskMissing: string[] = [];
+  if ((session?.indicatorDrops ?? null) === null) flaskMissing.push("add the indicator");
+  if (!prep?.flaskPlaced) flaskMissing.push("place the flask under the burette");
+
+  const prepared =
+    buretteMissing.length === 0 &&
+    sampleMissing.length === 0 &&
+    flaskMissing.length === 0 &&
+    // The first stage is not "prepared" while the solution the burette is
+    // filled from is still missing.
+    (index !== 0 || solutionRequirement === null || solutionRequirement.done);
+
   const requirements: StageRequirement[] = [
+    ...(index === 0 && solutionRequirement ? [solutionRequirement] : []),
     {
-      key: "prepare",
-      label: "Prepare the apparatus, sample and indicator",
-      done: prepared,
+      key: "prepare_burette",
+      label:
+        buretteMissing.length === 0
+          ? "Burette cleaned, conditioned, filled and cleared"
+          : `Prepare the burette: ${buretteMissing.join("; ")}.`,
+      done: buretteMissing.length === 0,
+    },
+    {
+      key: "prepare_sample",
+      label:
+        sampleMissing.length === 0
+          ? "Sample prepared and transferred"
+          : `Prepare the sample: ${sampleMissing.join("; ")}.`,
+      done: sampleMissing.length === 0,
+    },
+    {
+      key: "prepare_flask",
+      label:
+        flaskMissing.length === 0
+          ? "Indicator added, flask placed"
+          : `Ready the flask: ${flaskMissing.join("; ")}.`,
+      done: flaskMissing.length === 0,
     },
     {
       key: "trials",
@@ -163,10 +249,29 @@ export function projectExperimentWorkflow(
   publicState: TitrationPublicState,
   requiredObservations: readonly WorkflowRequiredObservation[] = [],
 ): ExperimentWorkflowStatus {
+  const solution = publicState.solution ?? emptyWorkingSolution();
+  const solutionBlockers = solutionPreparationBlockers(config, solution);
+  const solutionRequirement: StageRequirement | null = config.solutionDilution
+    ? {
+        key: "prepare_solution",
+        label:
+          solutionBlockers.length === 0
+            ? "Working solution prepared from the stock solution"
+            : `Prepare the working solution: ${solutionBlockers.join("; ")}`,
+        done: solutionBlockers.length === 0,
+      }
+    : null;
+
   const stages: StageWorkflowStatus[] = [];
   let firstIncomplete: StageWorkflowStatus | null = null;
   for (const [index, stageInput] of config.stages.entries()) {
-    const status = projectStage(stageInput, index, publicState, firstIncomplete);
+    const status = projectStage(
+      stageInput,
+      index,
+      publicState,
+      firstIncomplete,
+      solutionRequirement,
+    );
     stages.push(status);
     // A later stage locks behind the FIRST incomplete earlier stage, so the
     // student always sees exactly which stage unblocks their work.

@@ -6,7 +6,7 @@
  * harness — routes actions identically and cannot drift apart. It performs no
  * persistence, reads no environment, and imports nothing server-only.
  *
- * Two checks belong here rather than in the engine, because they are properties
+ * Three checks belong here rather than in the engine, because they are properties
  * of the EXPERIMENT or the client rather than of the titration chemistry:
  *
  *  - a stale client naming a stage this attempt no longer has is rejected as a
@@ -15,6 +15,14 @@
  *  - a stage whose predecessors are still incomplete is LOCKED: the experiment
  *    runs in order (Stage A standardisation before Stage B determination), so
  *    an action naming a locked stage is refused no matter what the client shows.
+ *
+ * A fourth family of checks enforces the Experiment 2 preparation procedure:
+ * filling requires a cleaned and conditioned burette, and starting a trial
+ * requires the full preparation chain (weighing by difference, dissolution,
+ * transfer, rinses, indicator, flask placement, cleared tip) for trial 1, plus
+ * waste disposal of the previous trial for later trials. These live here — not
+ * in the engine functions, which keep validating only their own slot — so the
+ * titration core the earlier tests describe keeps working unchanged.
  *
  * SECURITY: `expected` is deliberately dropped from a `report_molarity` result.
  * Correctness is recomputed server-side at grade time from hidden state, so the
@@ -25,16 +33,32 @@ import type { TitrationProtocolAction } from "./protocol";
 import {
   addIndicator,
   addTitrant,
+  clearAirBubble,
   completeTrial,
+  conditionBurette,
+  discardToWaste,
+  diluteWorkingSolution,
+  dissolveKhp,
+  measureStockVolume,
+  mixWorkingSolution,
+  obtainTitrantPortion,
   observeEndpoint,
   pipetteAnalyte,
+  placeFlask,
+  preparationBlockersForTrial,
   projectPublicState,
   readBurette,
   recordObservation,
   reportMolarity,
+  rinseBeaker,
+  rinseBurette,
   setupApparatus,
+  solutionPreparationBlockers,
   startTrialAction,
+  transferSolution,
   weighAnalyte,
+  weighBeakerMass,
+  REQUIRED_CONDITIONING_RINSES,
   type ActionResult,
   type TitrationSession,
 } from "./engine";
@@ -75,6 +99,66 @@ function acceptedOutcome(
   };
 }
 
+/** Refusal for a skipped preparation step. Never carries a hidden value. */
+function preparationRefusal(message: string): TitrationDispatchOutcome {
+  return {
+    accepted: false,
+    code: "preparation_incomplete",
+    message,
+    colour: null,
+    calculationCorrect: null,
+  };
+}
+
+/**
+ * Procedure gates for filling and starting trials. Returns a refusal, or null
+ * when the action may proceed to the engine.
+ */
+function preparationGateFor(
+  session: TitrationSession,
+  action: TitrationProtocolAction,
+): TitrationDispatchOutcome | null {
+  if (action.type === "setup_apparatus") {
+    // Part I first: the burette is filled from the prepared working solution.
+    const solutionBlockers = solutionPreparationBlockers(session.config, session.public.solution);
+    if (solutionBlockers.length > 0) return preparationRefusal(solutionBlockers[0]);
+    const prep = session.public.stages[action.stageKey].preparation;
+    if (!prep.buretteCleaned) {
+      return preparationRefusal("Clean the burette with tap water before filling it.");
+    }
+    if (!prep.beakerObtained) {
+      return preparationRefusal(
+        "Obtain a portion of the working solution in a clean, dry beaker and cover it with a watch glass before filling the burette.",
+      );
+    }
+    if (prep.conditioningRinses < REQUIRED_CONDITIONING_RINSES) {
+      return preparationRefusal(
+        `Condition the burette with NaOH before filling it (${prep.conditioningRinses} of ${REQUIRED_CONDITIONING_RINSES} rinses done).`,
+      );
+    }
+    return null;
+  }
+  if (action.type === "start_trial") {
+    const stage = session.public.stages[action.stageKey];
+    if (action.trialNumber > 1 && !stage.preparation.lastTrialDiscarded) {
+      return preparationRefusal(
+        `Discard the completed trial into the waste container before starting trial ${action.trialNumber}.`,
+      );
+    }
+    if (action.trialNumber === 1) {
+      const blockers = preparationBlockersForTrial(
+        session.config,
+        action.stageKey,
+        stage,
+        session.public.solution,
+      );
+      if (blockers.length > 0) return preparationRefusal(blockers[0]);
+    }
+    return null;
+  }
+  return null;
+}
+
 /** Route one validated protocol action into the engine. Engine-only rejections. */
 export function dispatchTitrationAction(
   session: TitrationSession,
@@ -111,6 +195,12 @@ export function dispatchTitrationAction(
       calculationCorrect: null,
     };
   }
+  // Preparation procedure (Experiment 2, Part 2): a burette is filled only
+  // after cleaning and conditioning, and a trial starts only after the full
+  // preparation chain — or, for later trials, after the previous trial's
+  // solution has been discarded into waste.
+  const preparationGate = preparationGateFor(session, action);
+  if (preparationGate) return preparationGate;
   switch (action.type) {
     case "setup_apparatus": {
       const result = setupApparatus(session, action.stageKey, action.titrantKey, action.initialReadingMl);
@@ -146,6 +236,58 @@ export function dispatchTitrationAction(
     }
     case "complete_trial": {
       const result = completeTrial(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "measure_naoh_stock": {
+      const result = measureStockVolume(session, action.stageKey, action.observedVolumeMl);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "dilute_naoh_solution": {
+      const result = diluteWorkingSolution(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "mix_naoh_solution": {
+      const result = mixWorkingSolution(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "obtain_naoh_portion": {
+      const result = obtainTitrantPortion(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "rinse_burette": {
+      const result = rinseBurette(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "condition_burette": {
+      const result = conditionBurette(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "clear_air_bubble": {
+      const result = clearAirBubble(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "weigh_beaker": {
+      const result = weighBeakerMass(session, action.stageKey, action.observedMassG);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "dissolve_khp": {
+      const result = dissolveKhp(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "transfer_solution": {
+      const result = transferSolution(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "rinse_beaker": {
+      const result = rinseBeaker(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "place_flask": {
+      const result = placeFlask(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "discard_to_waste": {
+      const result = discardToWaste(session, action.stageKey);
       return result.ok ? acceptedOutcome() : rejected(result);
     }
     case "report_molarity": {

@@ -37,6 +37,14 @@ const STAGE_B = exp02TitrationConfig.stages[1].key;
 const TITRANT_A = exp02TitrationConfig.stages[0].titrantKey;
 const TITRANT_B = exp02TitrationConfig.stages[1].titrantKey;
 const WEIGHED_MASS_G = 0.6;
+/** Synthetic empty-beaker mass for the dev harness (student-entered in reality). */
+const BEAKER_MASS_G = 52.34;
+/**
+ * Synthetic stock volume for the dev harness. The student enters their own
+ * reading in reality, and the value is EVIDENCE the dilution was performed: it
+ * sets no concentration, so any plausible volume serves the harness equally.
+ */
+const STOCK_VOLUME_ML = 10;
 
 /** A fixed, obviously-synthetic attempt id: this is not a real attempt. */
 export const PREVIEW_ATTEMPT_ID = "00000000-0000-4000-8000-000000000002";
@@ -74,22 +82,63 @@ function stageAExpectedMolarity(deliveredMl: number): number {
   return Math.round((moles / (deliveredMl / 1000)) * 1e6) / 1e6;
 }
 
-/** Rinse, fill and clamp; weigh the standard into the flask; add the indicator. */
-function prepared(): TitrationProtocolAction[] {
+/**
+ * Part I: prepare the working titrant from the stock. Attempt-level, so it is
+ * done once and every stage is served from it.
+ */
+function workingSolution(): TitrationProtocolAction[] {
   return [
-    { type: "setup_apparatus", stageKey: STAGE_A, titrantKey: TITRANT_A, initialReadingMl: 0 },
-    { type: "weigh_analyte", stageKey: STAGE_A, observedMassG: WEIGHED_MASS_G },
-    { type: "add_indicator", stageKey: STAGE_A, drops: 3 },
+    { type: "measure_naoh_stock", stageKey: STAGE_A, observedVolumeMl: STOCK_VOLUME_ML },
+    { type: "dilute_naoh_solution", stageKey: STAGE_A },
+    { type: "mix_naoh_solution", stageKey: STAGE_A },
   ];
 }
 
-/** One complete stage-A trial titrated to `deliveredMl` and closed. */
+/** Clean, take the portion the burette is served from, then condition three times. */
+function burettePreparation(stageKey: string): TitrationProtocolAction[] {
+  return [
+    { type: "rinse_burette", stageKey },
+    { type: "obtain_naoh_portion", stageKey },
+    { type: "condition_burette", stageKey },
+    { type: "condition_burette", stageKey },
+    { type: "condition_burette", stageKey },
+  ];
+}
+
+/** Part I plus the burette work, filled and clamped with the zero reading taken. */
+function filledBurette(): TitrationProtocolAction[] {
+  return [
+    ...workingSolution(),
+    ...burettePreparation(STAGE_A),
+    { type: "setup_apparatus", stageKey: STAGE_A, titrantKey: TITRANT_A, initialReadingMl: 0 },
+  ];
+}
+
+/** The full Part 2 preparation chain: clean, condition, fill, weigh by
+ * difference, dissolve, transfer, rinse, indicate, place. */
+function prepared(): TitrationProtocolAction[] {
+  return [
+    ...filledBurette(),
+    { type: "clear_air_bubble", stageKey: STAGE_A },
+    { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: BEAKER_MASS_G },
+    { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: BEAKER_MASS_G + WEIGHED_MASS_G },
+    { type: "dissolve_khp", stageKey: STAGE_A },
+    { type: "transfer_solution", stageKey: STAGE_A },
+    { type: "rinse_beaker", stageKey: STAGE_A },
+    { type: "rinse_beaker", stageKey: STAGE_A },
+    { type: "add_indicator", stageKey: STAGE_A, drops: 3 },
+    { type: "place_flask", stageKey: STAGE_A },
+  ];
+}
+
+/** One complete stage-A trial titrated to `deliveredMl`, closed and discarded. */
 function trial(deliveredMl: number, trialNumber: number): TitrationProtocolAction[] {
   return [
     { type: "start_trial", stageKey: STAGE_A, trialNumber, initialReadingMl: 0 },
     { type: "add_titrant", stageKey: STAGE_A, volumeMl: deliveredMl },
     { type: "read_burette", stageKey: STAGE_A, observedFinalMl: deliveredMl },
     { type: "complete_trial", stageKey: STAGE_A },
+    { type: "discard_to_waste", stageKey: STAGE_A },
   ];
 }
 
@@ -121,16 +170,15 @@ export const PREVIEW_SCENARIOS: PreviewScenario[] = [
   {
     id: "burette-filled",
     title: "Burette filled",
-    description: "Rinsed, filled and clamped, with the initial reading recorded.",
+    description:
+      "Working solution prepared, then cleaned, conditioned, filled and clamped, with the initial reading recorded.",
     seed: "preview-filled",
-    script: () => [
-      { type: "setup_apparatus", stageKey: STAGE_A, titrantKey: TITRANT_A, initialReadingMl: 0 },
-    ],
+    script: () => filledBurette(),
   },
   {
     id: "sample-ready",
     title: "Sample and indicator ready",
-    description: "The standard has been weighed and the indicator added.",
+    description: "The standard has been weighed by difference and the indicator added.",
     seed: "preview-sample",
     script: () => prepared(),
   },
@@ -194,7 +242,7 @@ export const PREVIEW_SCENARIOS: PreviewScenario[] = [
   },
   {
     id: "stage-b",
-    title: "Stage B: pipetted aliquot",
+    title: "Stage B: measured HCl aliquot",
     description: "Stage A concordant, with the HCl aliquot delivered for stage B.",
     seed: "preview-stage-b",
     script: (session) => {
@@ -202,13 +250,18 @@ export const PREVIEW_SCENARIOS: PreviewScenario[] = [
       return [
         ...prepared(),
         ...concordantStageA(session),
+        // Stage B draws its own portion of the SAME prepared solution, so Part I
+        // is not repeated — only the per-stage cleaning and conditioning are.
+        ...burettePreparation(STAGE_B),
         { type: "setup_apparatus", stageKey: STAGE_B, titrantKey: TITRANT_B, initialReadingMl: 0 },
         {
           type: "pipette_analyte",
           stageKey: STAGE_B,
           observedVolumeMl: portion.kind === "pipetted_volume" ? portion.nominalVolumeMl : 25,
         },
+        { type: "clear_air_bubble", stageKey: STAGE_B },
         { type: "add_indicator", stageKey: STAGE_B, drops: 3 },
+        { type: "place_flask", stageKey: STAGE_B },
       ];
     },
   },

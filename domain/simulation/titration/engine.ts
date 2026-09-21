@@ -7,14 +7,17 @@
  * the public half; grading takes both. No action can set a score, a hidden
  * concentration or an endpoint — those are derived, never assigned.
  *
- * ACTIONS (domain names; Phase 3 will map them to the persistence protocol):
- * setupApparatus -> weighAnalyte/pipetteAnalyte -> addIndicator ->
+ * ACTIONS (domain names; the persistence protocol maps them in `dispatch`):
+ * measureStockVolume/diluteWorkingSolution/mixWorkingSolution (Part I) ->
+ * obtainTitrantPortion -> setupApparatus -> weighAnalyte/pipetteAnalyte ->
+ * addIndicator ->
  * startTrial -> addTitrant -> readBurette -> observeEndpoint ->
  * completeTrial (/ discardTrial on overshoot) -> reportMolarity x N ->
  * assessment via gradeSession().
  */
 import {
   analyteConcentrationFromTitration,
+  massByDifference,
   molesFromMassAndMolarMass,
 } from "@/domain/chemistry/calculations";
 import { KHP_MOLAR_MASS_G_PER_MOL } from "@/domain/chemistry/molar-masses";
@@ -22,6 +25,7 @@ import { roundTo } from "@/domain/chemistry/units";
 import { createSeededRandom, deriveSeed } from "@/domain/simulation/random";
 import { deliveredVolumeMl, titreFitsBurette } from "./burette";
 import type { TitrationExperimentConfig, TitrationStageConfig } from "./config";
+import { maxTrialAttemptsFor } from "./config";
 import { judgeEndpointStop, observeFlaskColour, flaskColourFromConfigName, type FlaskColour } from "./endpoint";
 import { deriveHiddenState, type AttemptHiddenState } from "./hidden";
 import { classifyReadingError } from "./reading";
@@ -54,6 +58,99 @@ export interface StageSession {
   trials: TrialRecord[];
   reportedMolaritiesM: number[];
   openTrial: TrialRecord | null;
+  /** Procedure preparation (Part 2): cleaning, conditioning, KHP handling. */
+  preparation: StagePreparation;
+}
+
+/**
+ * Per-stage preparation state for the Experiment 2 procedure. Every step the
+ * manual requires before and between titrations — burette cleaning and
+ * conditioning, air-bubble removal, weighing by difference, dissolution,
+ * transfer, beaker rinses, flask placement and waste disposal — tracked here
+ * so the trial gate and the submit gate can enforce the order server-side.
+ */
+/**
+ * Part I of the procedure: the working titrant prepared from a stock solution.
+ *
+ * ATTEMPT-level, not stage-level: the same prepared solution is used for every
+ * stage of the experiment, so asking the student to dilute it again for Part III
+ * would be wrong. Empty when the experiment is given a ready-made titrant.
+ */
+export interface WorkingSolutionPreparation {
+  /**
+   * Stock volume the student measured, in mL, or null before the step.
+   *
+   * EVIDENCE ONLY. The procedure does not state the final concentration of the
+   * prepared solution, so this number is recorded and audited but deliberately
+   * feeds no calculation: the working strength is the configuration's nominal
+   * value plus the attempt's hidden truth.
+   */
+  stockVolumeMl: number | null;
+  /** Distilled water added to complete the dilution. */
+  diluted: boolean;
+  /** Stopper as far as possible and swirl to mix. */
+  mixed: boolean;
+}
+
+export function emptyWorkingSolution(): WorkingSolutionPreparation {
+  return { stockVolumeMl: null, diluted: false, mixed: false };
+}
+
+export interface StagePreparation {
+  /** Burette rinsed with tap water (manual: several ~10 mL portions). */
+  buretteCleaned: boolean;
+  /** NaOH conditioning rinses so far (manual: three ~5 mL portions). */
+  conditioningRinses: number;
+  /** Air expelled from the burette tip after filling. */
+  airBubbleCleared: boolean;
+  /** Empty-beaker weighing for the by-difference KHP sample. */
+  beakerMassG: number | null;
+  /** Beaker-plus-KHP weighing; the sample mass is the difference. */
+  beakerPlusKhpMassG: number | null;
+  /** KHP dissolved in ~30 mL distilled water. */
+  khpDissolved: boolean;
+  /** KHP solution transferred to the Erlenmeyer flask. */
+  khpTransferred: boolean;
+  /** Beaker rinses transferred after the solution (manual: twice). */
+  beakerRinses: number;
+  /**
+   * A portion of the prepared titrant drawn into a clean, dry 250 mL beaker
+   * and covered with a watch glass (manual: about 120 mL). The burette is
+   * cleaned with tap water, then conditioned and filled from THIS beaker, so
+   * taking the portion is a step in its own right.
+   */
+  beakerObtained: boolean;
+  /** Flask placed under the burette, ready to titrate. */
+  flaskPlaced: boolean;
+  /** The latest completed trial has been discarded into waste. */
+  lastTrialDiscarded: boolean;
+  /** Completed trials discarded to waste so far (waste level signal). */
+  wasteDiscards: number;
+}
+
+/** Manual: "Rinse the burette with three portions of about 5 mL". */
+export const REQUIRED_CONDITIONING_RINSES = 3;
+/** Manual: "Rinse the beaker twice with about 5 mL distilled water". */
+export const REQUIRED_BEAKER_RINSES = 2;
+
+export function emptyPreparation(): StagePreparation {
+  return {
+    buretteCleaned: false,
+    conditioningRinses: 0,
+    airBubbleCleared: false,
+    beakerMassG: null,
+    beakerPlusKhpMassG: null,
+    khpDissolved: false,
+    khpTransferred: false,
+    beakerRinses: 0,
+    beakerObtained: false,
+    flaskPlaced: false,
+    // True until a trial completes: waste tracking starts with the first trial
+    // run under this state, so resumed attempts are never asked to discard a
+    // flask that no longer exists.
+    lastTrialDiscarded: true,
+    wasteDiscards: 0,
+  };
 }
 
 /**
@@ -96,6 +193,8 @@ export interface TitrationSessionState {
   readonly schemaVersion: 1;
   readonly experimentNumber: number;
   readonly stages: Record<string, StageSession>;
+  /** Part I: the working titrant, shared by every stage. */
+  solution: WorkingSolutionPreparation;
   readonly errorEvents: ErrorEvent[];
   completedTrials: number;
   observations: PublicObservation[];
@@ -158,6 +257,7 @@ export function createTitrationSession(
       trials: [],
       reportedMolaritiesM: [],
       openTrial: null,
+      preparation: emptyPreparation(),
     };
   }
   return {
@@ -167,6 +267,7 @@ export function createTitrationSession(
       schemaVersion: 1,
       experimentNumber: config.experimentNumber,
       stages,
+      solution: emptyWorkingSolution(),
       errorEvents: [],
       completedTrials: 0,
       observations: [],
@@ -327,6 +428,7 @@ export function startTrialAction(
       stageKey,
       initialReadingMl,
       session.config.trialRules.maxTrials,
+      maxTrialAttemptsFor(session.config.trialRules),
     );
     stage.openTrial = trial;
     stage.phase = "titrating";
@@ -484,6 +586,8 @@ export function completeTrial(session: TitrationSession, stageKey: string): Acti
     });
     stage.trials.push(trial);
     stage.openTrial = null;
+    // An overshot flask holds a spent solution too: it must be discarded.
+    stage.preparation.lastTrialDiscarded = false;
     return { ok: true };
   }
   trial.status = "recorded";
@@ -491,6 +595,8 @@ export function completeTrial(session: TitrationSession, stageKey: string): Acti
   stage.openTrial = null;
   stage.phase = "titrating";
   session.public.completedTrials += 1;
+  // The spent solution must be discarded into waste before the next trial.
+  stage.preparation.lastTrialDiscarded = false;
   return { ok: true };
 }
 
@@ -601,6 +707,394 @@ export function recordObservation(
     session.public.observations.push({ stageKey, fieldKey, textValue: trimmed });
   }
   return { ok: true };
+}
+
+/**
+ * Procedure preparation actions (Experiment 2, Part 2).
+ *
+ * Each function validates only its own slot — the ORDER across steps (clean
+ * before condition before fill, weigh before dissolve before transfer, discard
+ * before the next trial) is enforced by the dispatch layer's trial gate, so
+ * the titration core below keeps working exactly as its tests describe.
+ */
+
+/**
+ * Part I, step 1: measure the stock solution the working titrant is diluted
+ * from. The recorded volume is evidence of the step; it is never used to derive
+ * a concentration (see `WorkingSolutionPreparation`).
+ */
+export function measureStockVolume(
+  session: TitrationSession,
+  stageKey: string,
+  observedVolumeMl: number,
+): ActionResult {
+  mutableStage(session, stageKey);
+  const solution = session.public.solution;
+  if (solution.stockVolumeMl !== null) {
+    return fail("the stock solution has already been measured", "invalid_sequence");
+  }
+  if (!(observedVolumeMl > 0) || !Number.isFinite(observedVolumeMl)) {
+    return fail("the measured stock volume must be positive", "invalid_sequence");
+  }
+  solution.stockVolumeMl = roundTo(observedVolumeMl, 2);
+  return { ok: true };
+}
+
+/** Part I, step 2: add distilled water to complete the dilution. */
+export function diluteWorkingSolution(session: TitrationSession, stageKey: string): ActionResult {
+  mutableStage(session, stageKey);
+  const solution = session.public.solution;
+  if (solution.stockVolumeMl === null) {
+    return fail("measure the stock solution before diluting it", "invalid_sequence");
+  }
+  if (solution.diluted) {
+    return fail("the working solution is already diluted", "invalid_sequence");
+  }
+  solution.diluted = true;
+  return { ok: true };
+}
+
+/** Part I, step 3: stopper as far as possible and swirl to mix. */
+export function mixWorkingSolution(session: TitrationSession, stageKey: string): ActionResult {
+  mutableStage(session, stageKey);
+  const solution = session.public.solution;
+  if (!solution.diluted) {
+    return fail("dilute the working solution before mixing it", "invalid_sequence");
+  }
+  if (solution.mixed) {
+    return fail("the working solution is already mixed", "invalid_sequence");
+  }
+  solution.mixed = true;
+  return { ok: true };
+}
+
+/**
+ * Manual: obtain about 120 mL of the prepared NaOH in a clean, dry 250 mL beaker
+ * and cover it with a watch glass. This beaker is what conditions and fills the
+ * burette, so it is a step, not a detail.
+ */
+export function obtainTitrantPortion(session: TitrationSession, stageKey: string): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (!session.public.solution.mixed) {
+    return fail("prepare the working solution before taking a portion of it", "invalid_sequence");
+  }
+  if (stage.preparation.beakerObtained) {
+    return fail("the beaker already holds a portion of the titrant", "invalid_sequence");
+  }
+  stage.preparation.beakerObtained = true;
+  return { ok: true };
+}
+
+/** Manual: clean the burette by rinsing with tap water. */
+export function rinseBurette(session: TitrationSession, stageKey: string): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (stage.preparation.buretteCleaned) {
+    return fail("the burette is already cleaned", "invalid_sequence");
+  }
+  stage.preparation.buretteCleaned = true;
+  return { ok: true };
+}
+
+/** Manual: rinse the burette with three ~5 mL portions of the NaOH solution. */
+export function conditionBurette(session: TitrationSession, stageKey: string): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  const prep = stage.preparation;
+  if (!prep.buretteCleaned) {
+    return fail("clean the burette with tap water before conditioning it", "invalid_sequence");
+  }
+  if (!prep.beakerObtained) {
+    // The conditioning rinses ARE the titrant: there is nothing to rinse with
+    // until a portion has been obtained from the prepared working solution.
+    return fail(
+      "obtain a portion of the working solution in a beaker before conditioning the burette",
+      "invalid_sequence",
+    );
+  }
+  if (prep.conditioningRinses >= REQUIRED_CONDITIONING_RINSES) {
+    return fail("the burette is already conditioned", "invalid_sequence");
+  }
+  prep.conditioningRinses += 1;
+  return { ok: true };
+}
+
+/** Manual: drain NaOH through the tip into a small beaker to expel air. */
+export function clearAirBubble(session: TitrationSession, stageKey: string): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (!stage.apparatusReady) {
+    return fail("fill the burette before clearing its tip", "invalid_sequence");
+  }
+  if (stage.preparation.airBubbleCleared) {
+    return fail("the burette tip is already cleared", "invalid_sequence");
+  }
+  stage.preparation.airBubbleCleared = true;
+  return { ok: true };
+}
+
+/**
+ * Weighing by difference (manual: weigh the empty beaker, add ~0.6 g KHP,
+ * re-weigh). The first call records the empty beaker, the second records
+ * beaker-plus-KHP and derives the sample mass with `massByDifference` — the
+ * student can never set the sample mass directly through this action.
+ */
+export function weighBeakerMass(
+  session: TitrationSession,
+  stageKey: string,
+  observedMassG: number,
+): ActionResult {
+  const cfg = stageConfig(session.config, stageKey);
+  const stage = mutableStage(session, stageKey);
+  if (cfg.analytePortion.kind !== "weighed_mass") {
+    return fail("this stage does not weigh its analyte", "invalid_sequence");
+  }
+  if (!stage.apparatusReady) {
+    recordError(session, {
+      code: "invalid_sequence",
+      trialNumber: null,
+      stageKey,
+      detail: "weighed before apparatus setup",
+      severe: false,
+    });
+    return fail("set up the burette before weighing", "invalid_sequence");
+  }
+  if (!(observedMassG > 0) || !Number.isFinite(observedMassG)) {
+    return fail("weighed mass must be positive", "invalid_sequence");
+  }
+  const prep = stage.preparation;
+  const massG = roundTo(observedMassG, 2);
+  if (prep.beakerMassG === null) {
+    prep.beakerMassG = massG;
+    return { ok: true };
+  }
+  if (prep.beakerPlusKhpMassG !== null) {
+    return fail("both beaker weighings are already recorded for this stage", "invalid_sequence");
+  }
+  if (!(massG > prep.beakerMassG)) {
+    recordError(session, {
+      code: "reading_error",
+      trialNumber: null,
+      stageKey,
+      detail: `second weighing ${massG} g does not exceed the empty beaker ${prep.beakerMassG} g`,
+      severe: false,
+    });
+    return fail("the beaker-plus-KHP weighing must exceed the empty beaker", "invalid_sequence");
+  }
+  prep.beakerPlusKhpMassG = massG;
+  const sampleG = roundTo(massByDifference(massG, prep.beakerMassG), 2);
+  stage.analyteMassG = sampleG;
+  stage.phase = "analyte_ready";
+  stage.flaskColour = null;
+  const quality = classifyReadingError("balance", Math.abs(sampleG - cfg.analytePortion.nominalMassG));
+  if (quality === "gross_error") {
+    recordError(session, {
+      code: "reading_error",
+      trialNumber: null,
+      stageKey,
+      detail: `implausible KHP sample ${sampleG} g by difference`,
+      severe: false,
+    });
+  }
+  return { ok: true };
+}
+
+/** Manual: dissolve the KHP in ~30 mL distilled water with stirring. */
+export function dissolveKhp(session: TitrationSession, stageKey: string): ActionResult {
+  const cfg = stageConfig(session.config, stageKey);
+  const stage = mutableStage(session, stageKey);
+  if (cfg.analytePortion.kind !== "weighed_mass") {
+    return fail("this stage has no KHP to dissolve", "invalid_sequence");
+  }
+  if (stage.analyteMassG === null) {
+    return fail("weigh the KHP sample before dissolving it", "invalid_sequence");
+  }
+  if (stage.preparation.khpDissolved) {
+    return fail("the KHP is already dissolved", "invalid_sequence");
+  }
+  stage.preparation.khpDissolved = true;
+  return { ok: true };
+}
+
+/** Manual: transfer the KHP solution into the clean Erlenmeyer flask. */
+export function transferSolution(session: TitrationSession, stageKey: string): ActionResult {
+  const cfg = stageConfig(session.config, stageKey);
+  const stage = mutableStage(session, stageKey);
+  if (cfg.analytePortion.kind !== "weighed_mass") {
+    return fail("this stage has no KHP solution to transfer", "invalid_sequence");
+  }
+  if (!stage.preparation.khpDissolved) {
+    return fail("dissolve the KHP before transferring it", "invalid_sequence");
+  }
+  if (stage.preparation.khpTransferred) {
+    return fail("the solution is already in the flask", "invalid_sequence");
+  }
+  stage.preparation.khpTransferred = true;
+  // The transferred solution is what the indicator goes into: colourless until
+  // the indicator is added, matching the manual's acid-side appearance.
+  if (stage.flaskColour === null) {
+    stage.flaskColour = "colourless";
+  }
+  return { ok: true };
+}
+
+/** Manual: rinse the beaker twice with ~5 mL distilled water into the flask. */
+export function rinseBeaker(session: TitrationSession, stageKey: string): ActionResult {
+  const cfg = stageConfig(session.config, stageKey);
+  const stage = mutableStage(session, stageKey);
+  if (cfg.analytePortion.kind !== "weighed_mass") {
+    return fail("this stage has no beaker to rinse", "invalid_sequence");
+  }
+  if (!stage.preparation.khpTransferred) {
+    return fail("transfer the solution before rinsing the beaker", "invalid_sequence");
+  }
+  if (stage.preparation.beakerRinses >= REQUIRED_BEAKER_RINSES) {
+    return fail("the beaker is already rinsed twice", "invalid_sequence");
+  }
+  stage.preparation.beakerRinses += 1;
+  return { ok: true };
+}
+
+/** Place the flask under the burette, ready to titrate. */
+export function placeFlask(session: TitrationSession, stageKey: string): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (!stage.apparatusReady) {
+    return fail("fill the burette before placing the flask under it", "invalid_sequence");
+  }
+  if (stage.preparation.flaskPlaced) {
+    return fail("the flask is already under the burette", "invalid_sequence");
+  }
+  stage.preparation.flaskPlaced = true;
+  return { ok: true };
+}
+
+/**
+ * Manual: discard the flask contents into the waste container. Required after
+ * every completed trial (correct or overshot) before the next trial may start.
+ */
+export function discardToWaste(session: TitrationSession, stageKey: string): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (stage.trials.length === 0 || stage.preparation.lastTrialDiscarded) {
+    return fail("there is no completed trial to discard", "invalid_sequence");
+  }
+  stage.preparation.lastTrialDiscarded = true;
+  stage.preparation.wasteDiscards += 1;
+  // A fresh flask is colourless until the next trial's indicator chemistry.
+  stage.flaskColour = null;
+  return { ok: true };
+}
+
+/**
+ * Minimal config for trial readiness: stage order, keys and the analyte
+ * portion kind. Both the full experiment config and the whitelisted public
+ * view satisfy it, so the domain, the router and the view model share one
+ * implementation of "what is still missing before trial 1".
+ */
+export interface PreparationConfig {
+  /** Part I working-titrant dilution, or null when the titrant is ready-made. */
+  readonly solutionDilution: {
+    readonly stockKey: string;
+    readonly stockMolarityM: number;
+    readonly nominalWorkingMolarityM: number;
+  } | null;
+  readonly stages: ReadonlyArray<{
+    readonly key: string;
+    readonly analytePortion: { readonly kind: "weighed_mass" | "pipetted_volume" };
+  }>;
+}
+
+function stageConfigForPreparation(
+  config: PreparationConfig,
+  stageKey: string,
+): PreparationConfig["stages"][number] {
+  const stage = config.stages.find((s) => s.key === stageKey);
+  if (!stage) throw new Error(`unknown stage ${stageKey}`);
+  return stage;
+}
+
+/**
+ * Part I preparation in procedure order, as student-facing messages. Empty when
+ * the experiment has no dilution step or when it is complete — so a caller that
+ * only cares about the working solution (the fill gate) can ask for exactly
+ * that and nothing else.
+ */
+export function solutionPreparationBlockers(
+  config: PreparationConfig,
+  solution: WorkingSolutionPreparation,
+): string[] {
+  const dilution = config.solutionDilution;
+  if (!dilution) return [];
+  if (solution.stockVolumeMl === null) {
+    return [`Measure the ${dilution.stockMolarityM} M stock solution for the working titrant.`];
+  }
+  if (!solution.diluted) {
+    return [
+      `Add distilled water to dilute the stock to about ${dilution.nominalWorkingMolarityM} M.`,
+    ];
+  }
+  if (!solution.mixed) {
+    return ["Stopper the flask as far as possible and swirl to mix the working solution."];
+  }
+  return [];
+}
+
+/**
+ * Trial readiness in procedure order: every missing preparation step that must
+ * be satisfied before trial 1 may start, as student-facing messages. Empty
+ * means the stage is ready to titrate.
+ */
+export function preparationBlockersForTrial(
+  config: PreparationConfig,
+  stageKey: string,
+  stage: StageSession,
+  solution: WorkingSolutionPreparation,
+): string[] {
+  const cfg = stageConfigForPreparation(config, stageKey);
+  const prep = stage.preparation;
+  const blockers: string[] = [];
+  // Part I comes first in the procedure and is attempt-level: the burette is
+  // served from the working solution, whichever stage is being titrated.
+  blockers.push(...solutionPreparationBlockers(config, solution));
+  if (!prep.buretteCleaned) {
+    blockers.push("Clean the burette with tap water before filling it.");
+  }
+  if (!prep.beakerObtained) {
+    blockers.push(
+      "Obtain a portion of the working solution in a clean, dry 250 mL beaker and cover it with a watch glass.",
+    );
+  }
+  if (prep.conditioningRinses < REQUIRED_CONDITIONING_RINSES) {
+    blockers.push(
+      `Condition the burette with NaOH (${prep.conditioningRinses} of ${REQUIRED_CONDITIONING_RINSES} rinses done).`,
+    );
+  }
+  if (cfg.analytePortion.kind === "weighed_mass") {
+    if (prep.beakerMassG === null || prep.beakerPlusKhpMassG === null) {
+      blockers.push("Weigh the empty beaker, add KHP and weigh again: the sample mass comes from the difference.");
+    }
+  } else if (stage.analyteVolumeMl === null) {
+    blockers.push("Measure the aliquot volume before starting a trial.");
+  }
+  if (!prep.airBubbleCleared) {
+    blockers.push("Clear the air bubble from the burette tip before starting a trial.");
+  }
+  if (cfg.analytePortion.kind === "weighed_mass") {
+    if (!prep.khpDissolved) {
+      blockers.push("Dissolve the KHP in distilled water before transferring it.");
+    }
+    if (!prep.khpTransferred) {
+      blockers.push("Transfer the KHP solution to the Erlenmeyer flask.");
+    }
+    if (prep.beakerRinses < REQUIRED_BEAKER_RINSES) {
+      blockers.push(
+        `Rinse the beaker into the flask (${prep.beakerRinses} of ${REQUIRED_BEAKER_RINSES} rinses done).`,
+      );
+    }
+  }
+  if (stage.indicatorDrops === null) {
+    blockers.push("Add the phenolphthalein indicator before starting a trial.");
+  }
+  if (!prep.flaskPlaced) {
+    blockers.push("Place the flask under the burette before starting the trial.");
+  }
+  return blockers;
 }
 
 /**

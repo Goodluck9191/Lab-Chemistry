@@ -28,6 +28,8 @@ import { dispatchTitrationAction } from "@/domain/simulation/titration/dispatch"
 import { observeFlaskColour } from "@/domain/simulation/titration/endpoint";
 import {
   measurementRowsFor,
+  preparationMeasurementRows,
+  solutionMeasurementRows,
   trialRowFor,
   trialRowNumber,
 } from "@/domain/simulation/titration/persistence";
@@ -218,6 +220,24 @@ export async function applyTitrationAction(input: unknown): Promise<TitrationAct
     loaded.attemptId,
     trialIds,
     allTrials.flatMap((t) => measurementRowsFor(config, t)),
+  );
+  // By-difference beaker weighings join the append-only measurement history
+  // with deterministic labels, so a retried action never duplicates them.
+  await appendMeasurementRows(
+    supabase,
+    loaded.attemptId,
+    trialIds,
+    Object.entries(session.public.stages).flatMap(([stageKey, stage]) =>
+      preparationMeasurementRows(stageKey, stage.preparation, stage.analyteMassG),
+    ),
+  );
+  // Part I stock volume: recorded as evidence the dilution step was performed.
+  // It is deliberately not an input to any concentration (see the domain note).
+  await appendMeasurementRows(
+    supabase,
+    loaded.attemptId,
+    trialIds,
+    solutionMeasurementRows(session.public.solution),
   );
   await syncObservationRows(supabase, loaded.attemptId, trialIds, observationRows);
 

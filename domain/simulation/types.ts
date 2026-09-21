@@ -1,6 +1,6 @@
 import type { ExperimentType } from "../experiments/types";
 import type { AttemptSecrets } from "./secrets";
-import type { TitrationSessionState } from "./titration/engine";
+import type { StoredTitrationSessionState } from "./titration/schema";
 
 /**
  * DOMAIN CONTRACTS ONLY. Stage 1 defines the shape of a running experiment but
@@ -35,7 +35,7 @@ export interface SimulationState {
    * on every read by `projectPublicState`, and the strict browser-facing shape
    * is `TitrationPublicState`.
    */
-  titration?: TitrationSessionState;
+  titration?: StoredTitrationSessionState;
 }
 
 export interface SelectedApparatus {

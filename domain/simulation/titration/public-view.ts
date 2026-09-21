@@ -15,12 +15,14 @@
  * - `endpointBiasMl`, `readingNoiseMl` (simulation parameters, never manual)
  * - `assessmentWeights` (also mirrored into `attempt_secrets.rubricWeights`)
  */
-import type {
-  AnalytePortionConfig,
-  BuretteConfig,
-  IndicatorConfig,
-  TitrationExperimentConfig,
-  TitrationStageConfig,
+import {
+  maxTrialAttemptsFor,
+  type AnalytePortionConfig,
+  type BuretteConfig,
+  type IndicatorConfig,
+  type SolutionDilutionConfig,
+  type TitrationExperimentConfig,
+  type TitrationStageConfig,
 } from "./config";
 
 export interface PublicIndicatorView {
@@ -29,6 +31,11 @@ export interface PublicIndicatorView {
   acidColour: string;
   baseColour: string;
   drops: [number, number];
+  /**
+   * How long the endpoint colour must persist (manual: 45 to 60 s). Stated by
+   * the procedure, so the student is told it — the engine itself has no clock.
+   */
+  endpointPersistenceSeconds: [number, number];
 }
 
 export interface PublicBuretteView {
@@ -54,12 +61,14 @@ export type PublicTrialRulesView =
   | {
       minTrials: number;
       maxTrials: number;
+      maxTrialAttempts: number;
       discardOnOvershoot: boolean;
       concordance: { mode: "molarity"; maxSpreadM: number; useClosestPairAverage: boolean };
     }
   | {
       minTrials: number;
       maxTrials: number;
+      maxTrialAttempts: number;
       discardOnOvershoot: boolean;
       concordance: {
         mode: "titre_volume";
@@ -72,6 +81,11 @@ export interface PublicTitrationConfigView {
   experimentNumber: number;
   /** Manual nominal strength (e.g. "~0.2 M NaOH"), shown alongside the label. */
   nominalTitrantMolarityM: number;
+  /**
+   * Part I working-titrant dilution, or null when the titrant is ready-made.
+   * Both strengths are stated in the procedure itself; nothing here is hidden.
+   */
+  solutionDilution: SolutionDilutionConfig | null;
   stages: PublicStageView[];
   trialRules: PublicTrialRulesView;
 }
@@ -83,6 +97,10 @@ function indicatorView(indicator: IndicatorConfig): PublicIndicatorView {
     acidColour: indicator.acidColour,
     baseColour: indicator.baseColour,
     drops: [indicator.drops[0], indicator.drops[1]],
+    endpointPersistenceSeconds: [
+      indicator.endpointPersistenceSeconds[0],
+      indicator.endpointPersistenceSeconds[1],
+    ],
   };
 }
 
@@ -115,10 +133,14 @@ function stageView(stage: TitrationStageConfig): PublicStageView {
 function trialRulesView(config: TitrationExperimentConfig): PublicTrialRulesView {
   const rules = config.trialRules;
   const concordance = rules.concordance;
+  // Resolved here so every reader of the public view sees one number, whether or
+  // not the configuration chose to state a separate attempt cap.
+  const maxTrialAttempts = maxTrialAttemptsFor(rules);
   if (concordance.mode === "molarity") {
     return {
       minTrials: rules.minTrials,
       maxTrials: rules.maxTrials,
+      maxTrialAttempts,
       discardOnOvershoot: rules.discardOnOvershoot,
       concordance: {
         mode: "molarity",
@@ -130,6 +152,7 @@ function trialRulesView(config: TitrationExperimentConfig): PublicTrialRulesView
   return {
     minTrials: rules.minTrials,
     maxTrials: rules.maxTrials,
+    maxTrialAttempts,
     discardOnOvershoot: rules.discardOnOvershoot,
     concordance: {
       mode: "titre_volume",
@@ -145,6 +168,7 @@ export function publicTitrationConfigView(
   return {
     experimentNumber: config.experimentNumber,
     nominalTitrantMolarityM: config.nominalTitrantMolarityM,
+    solutionDilution: config.solutionDilution ? { ...config.solutionDilution } : null,
     stages: config.stages.map(stageView),
     trialRules: trialRulesView(config),
   };

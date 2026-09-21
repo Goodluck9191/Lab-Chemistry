@@ -67,6 +67,33 @@ const observationSchema = z.object({
   textValue: z.string().min(1).max(2000),
 });
 
+const stagePreparationSchema = z.object({
+  buretteCleaned: z.boolean(),
+  conditioningRinses: z.number().int().min(0).max(10),
+  airBubbleCleared: z.boolean(),
+  beakerMassG: z.number().finite().positive().nullable(),
+  beakerPlusKhpMassG: z.number().finite().positive().nullable(),
+  khpDissolved: z.boolean(),
+  khpTransferred: z.boolean(),
+  beakerRinses: z.number().int().min(0).max(10),
+  // Defaulted: a snapshot written before the portion step still resumes.
+  beakerObtained: z.boolean().default(false),
+  flaskPlaced: z.boolean(),
+  lastTrialDiscarded: z.boolean(),
+  wasteDiscards: z.number().int().min(0),
+});
+
+/**
+ * Part I working titrant, at the attempt level. EVIDENCE ONLY apart from the two
+ * booleans: the measured stock volume never determines a concentration, because
+ * the procedure does not state one for the prepared solution.
+ */
+const workingSolutionSchema = z.object({
+  stockVolumeMl: z.number().finite().positive().max(2000).nullable(),
+  diluted: z.boolean(),
+  mixed: z.boolean(),
+});
+
 const stageSessionSchema = z.object({
   phase: z.enum(["setup", "analyte_ready", "indicator_added", "titrating", "reported"]),
   apparatusReady: z.boolean(),
@@ -81,6 +108,12 @@ const stageSessionSchema = z.object({
   flaskColour: flaskColourSchema.nullable().default(null),
   /** Derived on every projection; ignored (and stripped) on resume. */
   concordance: concordanceSchema.optional(),
+  /**
+   * Procedure preparation. Optional so a snapshot written before it existed
+   * still resumes — the resume path normalises a missing value to the empty
+   * preparation. Live sessions always carry it.
+   */
+  preparation: stagePreparationSchema.optional(),
   trials: z.array(trialRecordSchema).max(20).default([]),
   reportedMolaritiesM: z.array(z.number().finite().positive()).max(20).default([]),
   openTrial: trialRecordSchema.nullable().default(null),
@@ -91,6 +124,13 @@ export const titrationSessionStateSchema = z.object({
   schemaVersion: z.literal(1),
   experimentNumber: z.number().int().positive(),
   stages: z.record(z.string(), stageSessionSchema),
+  /**
+   * Part I. Optional so a snapshot written before the dilution steps existed
+   * still resumes — the resume path normalises a missing value to the empty
+   * working solution, exactly as it does for the stage preparation. Live
+   * sessions always carry it.
+   */
+  solution: workingSolutionSchema.optional(),
   errorEvents: z.array(errorEventSchema).max(500),
   completedTrials: z.number().int().min(0),
   observations: z.array(observationSchema).max(40).default([]),
@@ -103,6 +143,15 @@ export const titrationSessionStateSchema = z.object({
  */
 export const titrationPublicStateSchema = titrationSessionStateSchema.extend({
   stages: z.record(z.string(), stageSessionSchema.extend({ concordance: concordanceSchema })),
+  solution: workingSolutionSchema,
 });
 
 export type TitrationPublicStateJson = z.infer<typeof titrationPublicStateSchema>;
+
+/**
+ * The STORED shape: `preparation` may be absent on documents written before it
+ * existed. Reads normalise it (see `resumeSessionFromSnapshot`); the live
+ * engine shape `TitrationSessionState` always carries it.
+ */
+export type StoredTitrationSessionState = z.infer<typeof titrationSessionStateSchema>;
+export type StoredStageSession = StoredTitrationSessionState["stages"][string];

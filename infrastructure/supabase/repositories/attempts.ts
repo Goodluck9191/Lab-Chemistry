@@ -321,6 +321,7 @@ export async function syncTrialRows(
     rows.map((row) => ({
       attempt_id: attemptId,
       trial_number: row.trialNumber,
+      stage_key: row.stageKey,
       status: row.status,
       initial_reading: row.initialReading,
       final_reading: row.finalReading,

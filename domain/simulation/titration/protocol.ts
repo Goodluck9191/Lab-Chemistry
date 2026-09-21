@@ -17,8 +17,18 @@ import { z } from "zod";
  * v2 added `record_observation` for the Phase 4 laboratory: a stale client
  * bundle sending v1 is rejected with a clear parse error and reloads, instead
  * of streaming actions the server can no longer interpret.
+ *
+ * v3 added the Experiment 2 preparation actions (burette cleaning and
+ * conditioning, air-bubble removal, weighing by difference, dissolution,
+ * transfer, beaker rinses, flask placement and waste disposal) for the
+ * procedure-accurate laboratory: a stale bundle that cannot perform the
+ * preparation is rejected the same way.
+ *
+ * v4 added Part I: the working titrant is measured from stock, diluted and
+ * mixed before any burette work, and a portion of it is drawn into the beaker
+ * the burette is served from.
  */
-export const SIMULATION_PROTOCOL_VERSION = 2;
+export const SIMULATION_PROTOCOL_VERSION = 4;
 
 const positiveFinite = z.number().finite().positive();
 
@@ -80,6 +90,66 @@ export const titrationActionSchema = z.discriminatedUnion("type", [
     stageKey: z.string().min(1).max(64),
     fieldKey: z.string().regex(/^[a-z0-9_]{3,64}$/),
     text: z.string().min(1).max(2000),
+  }),
+  // Part I: the working titrant is prepared from stock. These belong to the
+  // ATTEMPT rather than to one titration stage — the same solution serves every
+  // stage — so they carry the stage the student is working in only so the
+  // envelope stays uniform and the stage-order rule still applies.
+  z.object({
+    type: z.literal("measure_naoh_stock"),
+    stageKey: z.string().min(1).max(64),
+    /** Volume of stock the student measured off the cylinder, in mL. */
+    observedVolumeMl: positiveFinite.max(2000),
+  }),
+  z.object({
+    type: z.literal("dilute_naoh_solution"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("mix_naoh_solution"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  // Experiment 2 preparation (Part 2): counted steps with server-side order.
+  z.object({
+    type: z.literal("obtain_naoh_portion"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("rinse_burette"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("condition_burette"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("clear_air_bubble"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("weigh_beaker"),
+    stageKey: z.string().min(1).max(64),
+    observedMassG: positiveFinite.max(1000),
+  }),
+  z.object({
+    type: z.literal("dissolve_khp"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("transfer_solution"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("rinse_beaker"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("place_flask"),
+    stageKey: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("discard_to_waste"),
+    stageKey: z.string().min(1).max(64),
   }),
 ]);
 

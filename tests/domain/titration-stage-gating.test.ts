@@ -3,6 +3,7 @@ import { dispatchTitrationAction } from "@/domain/simulation/titration/dispatch"
 import {
   concordantStageASession,
   freshSession,
+  provisionStageB,
   STAGE_A,
   STAGE_B,
 } from "../helpers/titration-fixtures";
@@ -61,7 +62,21 @@ describe("dispatch stage ordering", () => {
   });
 
   it("accepts Stage A work on a fresh session — the first stage is never locked", () => {
-    const outcome = dispatchTitrationAction(freshSession(), EXPERIMENT_ID, {
+    // The stage lock never applies to the first stage; the preparation chain
+    // still does, so Part I runs, the burette is cleaned, the titrant portion is
+    // taken and the burette is conditioned before it is filled.
+    const session = freshSession();
+    const apply = (action: Parameters<typeof dispatchTitrationAction>[2]) =>
+      dispatchTitrationAction(session, EXPERIMENT_ID, action);
+    expect(apply({ type: "measure_naoh_stock", stageKey: STAGE_A, observedVolumeMl: 10 }).accepted).toBe(true);
+    expect(apply({ type: "dilute_naoh_solution", stageKey: STAGE_A }).accepted).toBe(true);
+    expect(apply({ type: "mix_naoh_solution", stageKey: STAGE_A }).accepted).toBe(true);
+    expect(apply({ type: "rinse_burette", stageKey: STAGE_A }).accepted).toBe(true);
+    expect(apply({ type: "obtain_naoh_portion", stageKey: STAGE_A }).accepted).toBe(true);
+    expect(apply({ type: "condition_burette", stageKey: STAGE_A }).accepted).toBe(true);
+    expect(apply({ type: "condition_burette", stageKey: STAGE_A }).accepted).toBe(true);
+    expect(apply({ type: "condition_burette", stageKey: STAGE_A }).accepted).toBe(true);
+    const outcome = apply({
       type: "setup_apparatus",
       stageKey: STAGE_A,
       titrantKey: "naoh",
@@ -72,15 +87,16 @@ describe("dispatch stage ordering", () => {
 
   it("unlocks Stage B once Stage A is concordant", () => {
     const session = concordantStageASession();
+    provisionStageB(session);
 
     const outcome = dispatchTitrationAction(session, EXPERIMENT_ID, {
-      type: "setup_apparatus",
+      type: "start_trial",
       stageKey: STAGE_B,
-      titrantKey: "naoh",
+      trialNumber: 1,
       initialReadingMl: 0,
     });
 
     expect(outcome.accepted).toBe(true);
-    expect(session.public.stages[STAGE_B].apparatusReady).toBe(true);
+    expect(session.public.stages[STAGE_B].openTrial?.trialNumber).toBe(1);
   });
 });

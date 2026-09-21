@@ -40,6 +40,19 @@ const PROTOCOL_ACTION_TYPES = [
   "complete_trial",
   "report_molarity",
   "record_observation",
+  "measure_naoh_stock",
+  "dilute_naoh_solution",
+  "mix_naoh_solution",
+  "obtain_naoh_portion",
+  "rinse_burette",
+  "condition_burette",
+  "clear_air_bubble",
+  "weigh_beaker",
+  "dissolve_khp",
+  "transfer_solution",
+  "rinse_beaker",
+  "place_flask",
+  "discard_to_waste",
 ];
 
 function midTrial(volumeMl: number): { session: TitrationSession; colour: string | null } {
@@ -131,6 +144,20 @@ describe("action feedback after the server answered", () => {
 
     const drops = outcomeFor(session, { type: "add_indicator", stageKey: STAGE_A, drops: 3 });
     expect(drops?.message).toContain("3 drops");
+
+    // Part I echoes the measured stock volume too, and never names a
+    // concentration the procedure does not state.
+    const stock = outcomeFor(session, {
+      type: "measure_naoh_stock",
+      stageKey: STAGE_A,
+      observedVolumeMl: 10,
+    });
+    expect(stock?.message).toContain("10.00 mL");
+    expect(stock?.message).not.toMatch(/0\.2\s*M/i);
+
+    const mixed = outcomeFor(session, { type: "mix_naoh_solution", stageKey: STAGE_A });
+    expect(mixed?.tone).toBe("success");
+    expect(mixed?.message).not.toMatch(/0\.2\s*M/i);
   });
 
   it("reports the delivered volume and the colour the laboratory observed", () => {

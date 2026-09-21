@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { LabActionOutcome } from "@/application/attempts/lab-transport";
+import { SIMULATION_PROTOCOL_VERSION } from "@/domain/simulation/titration/protocol";
 import { LabBench } from "@/components/lab/lab-bench";
 import { TitrationControls } from "@/components/lab/titration-controls";
 import { PreparationControls } from "@/components/lab/preparation-controls";
@@ -12,12 +13,15 @@ import {
   addIndicator,
   addTitrant,
   readBurette,
+  setupApparatus,
   startTrialAction,
   weighAnalyte,
 } from "@/domain/simulation/titration/engine";
 import {
   DEFAULT_SEED,
   STAGE_A,
+  STAGE_B,
+  concordantStageASession,
   freshSession,
   hiddenTruth,
   publicStateOf,
@@ -83,16 +87,38 @@ describe("laboratory bench (jsdom)", () => {
       /conical flask, 250 mL/i,
       /burette stand and clamp/i,
       /analytical balance/i,
-      /pipette with pipette filler/i,
       /waste container/i,
       /white tile/i,
       /burette, 50 mL, graduated to 0.1 mL/i,
       /volumetric flask/i,
-      /pipette rack/i,
       /beaker/i,
     ]) {
       expect(titles).toMatch(apparatus);
     }
+    // Stage A weighs its sample, so no aliquot ware is drawn at all.
+    expect(titles).not.toMatch(/pipette|measuring cylinder/i);
+  });
+
+  it("draws the ware the procedure names for the measured aliquot", () => {
+    // Stage A is complete, so stage B is the active stage on the bench.
+    const session = concordantStageASession("bench-vessel-seed");
+    setupApparatus(session, STAGE_B, "naoh", 0);
+    const state = labStateViewFor(session);
+    renderLabPanels({
+      state,
+      panels: (
+        <>
+          <LabBench initialState={state} />
+          <TitrationControls />
+        </>
+      ),
+    });
+
+    // The manual measures the HCl aliquot in a cylinder; no pipette is offered.
+    expect(screen.getByRole("button", { name: /measuring cylinder, 25 mL/i })).toBeTruthy();
+    const titles = svgTitles().join("\n");
+    expect(titles).toMatch(/measuring cylinder, 25 mL/i);
+    expect(titles).not.toMatch(/pipette/i);
   });
 
   it("reflects the persisted flask colour in the drawing and in text", () => {
@@ -151,7 +177,7 @@ describe("laboratory bench (jsdom)", () => {
 
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     expect(send).toHaveBeenCalledWith({
-      protocolVersion: 2,
+      protocolVersion: SIMULATION_PROTOCOL_VERSION,
       attemptId: state.attemptId,
       baseRevision: 4,
       action: { type: "add_titrant", stageKey: STAGE_A, volumeMl: 1 },
@@ -241,9 +267,12 @@ describe("laboratory bench (jsdom)", () => {
     });
 
     // A bad reading is refused before it is ever sent.
-    await user.type(screen.getByLabelText(/mass you obtained/i), "0.61235");
+    await user.type(screen.getByLabelText(/empty beaker mass/i), "52.34785");
     expect(screen.getByRole("alert").textContent).toMatch(/2 decimal places/i);
-    expect(screen.getByRole("button", { name: /record mass/i })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: /record empty weighing/i })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   it("never renders a hidden value from the session", () => {

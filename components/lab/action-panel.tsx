@@ -5,17 +5,19 @@ import { Badge } from "@/components/ui/badge";
 import { useActiveStage, useLabUi } from "./lab-state-provider";
 import {
   AnalyteSection,
+  BurettePreparationSection,
   BuretteSetupSection,
+  FlaskPlacementSection,
   IndicatorSection,
+  SolutionPreparationSection,
 } from "./preparation-controls";
 import {
   DeliverySection,
+  DiscardSection,
   ObserveSection,
   ReadingSection,
 } from "./titration-controls";
-import type {
-  StageView,
-} from "./view-model";
+import { ALIQUOT_VESSEL_COPY, type StageView } from "./view-model";
 import type { LabStateView } from "@/application/attempts/lab-state";
 
 /**
@@ -33,17 +35,11 @@ import type { LabStateView } from "@/application/attempts/lab-state";
  */
 export function ActionPanel({ initialState }: { initialState: LabStateView }) {
   const stage = useActiveStage();
-  const { selectedApparatusKey, selectedReagentKey, fillerAttached } = useLabUi();
+  const { selectedApparatusKey, selectedReagentKey } = useLabUi();
 
   if (!stage) return null;
 
-  const focus = resolveFocus(
-    stage,
-    selectedApparatusKey,
-    selectedReagentKey,
-    initialState,
-    fillerAttached,
-  );
+  const focus = resolveFocus(stage, selectedApparatusKey, selectedReagentKey, initialState);
 
   const preparationIsFocused = focus !== null && focus.kind === "preparation";
 
@@ -78,9 +74,12 @@ export function ActionPanel({ initialState }: { initialState: LabStateView }) {
 function FullPreparation({ initialState }: { initialState: LabStateView }) {
   return (
     <div className="flex flex-col gap-3">
+      <SolutionPreparationSection />
+      <BurettePreparationSection />
       <BuretteSetupSection initialState={initialState} />
       <AnalyteSection initialState={initialState} />
-<IndicatorSection />
+      <IndicatorSection />
+      <FlaskPlacementSection />
     </div>
   );
 }
@@ -91,6 +90,7 @@ function FullTitration() {
       <DeliverySection />
       <ObserveSection />
       <ReadingSection />
+      <DiscardSection />
     </div>
   );
 }
@@ -107,16 +107,31 @@ function resolveFocus(
   selectedApparatusKey: string | null,
   selectedReagentKey: string | null,
   initialState: LabStateView,
-  fillerAttached: boolean,
 ): Focus | null {
   // A reagent selection focuses the instrument that uses it.
   if (selectedReagentKey) {
+    if (selectedReagentKey === initialState.config.solutionDilution?.stockKey) {
+      return {
+        kind: "preparation",
+        title: "Prepare the working solution",
+        description:
+          "Part I: measure the stock solution, dilute it with distilled water and mix it before any burette work.",
+        section: <SolutionPreparationSection />,
+      };
+    }
     if (selectedReagentKey === stage.titrantKey) {
       return {
         kind: "preparation",
-        title: "Rinse, fill and clamp the burette",
-        description: `Fill the burette with the selected titrant, then record the initial reading.`,
-        section: <BuretteSetupSection initialState={initialState} />,
+        title: "Prepare the burette",
+        description: `Clean and condition it, then fill with the selected titrant and record the initial reading.`,
+        section: (
+          <>
+            <BurettePreparationSection />
+            <div className="mt-3">
+              <BuretteSetupSection initialState={initialState} />
+            </div>
+          </>
+        ),
       };
     }
     if (selectedReagentKey === stage.analyteKey) {
@@ -126,7 +141,7 @@ function resolveFocus(
         description:
           stage.portion.kind === "weighed_mass"
             ? "Weigh the primary standard and record the mass."
-            : "Deliver the aliquot with the pipette and record the volume.",
+            : `Measure the aliquot with the ${ALIQUOT_VESSEL_COPY[stage.portion.vessel].name} and record the volume.`,
         section: <AnalyteSection initialState={initialState} />,
       };
     }
@@ -150,17 +165,24 @@ function resolveFocus(
     case "burette":
       return {
         kind: "preparation",
-        title: "Rinse, fill and clamp the burette",
-        description: "Fill with the titrant and record the initial reading to close this section.",
-        section: <BuretteSetupSection initialState={initialState} />,
+        title: "Prepare the burette",
+        description: "Clean and condition it, fill with the titrant, record the initial reading, then clear the tip.",
+        section: (
+          <>
+            <BurettePreparationSection />
+            <div className="mt-3">
+              <BuretteSetupSection initialState={initialState} />
+            </div>
+          </>
+        ),
       };
+    case "graduated_cylinder":
     case "pipette":
       return {
         kind: "preparation",
-        title: "Pipette the aliquot",
-        description: fillerAttached
-          ? "Filler attached. Draw up the solution with the filler, then deliver into the flask."
-          : "Attach the filler first, then draw up the solution and deliver into the flask.",
+        title:
+          selectedApparatusKey === "pipette" ? "Pipette the aliquot" : "Measure the aliquot",
+        description: ALIQUOT_VESSEL_COPY[selectedApparatusKey].nextDescription,
         section: <AnalyteSection initialState={initialState} />,
       };
     case "analytical_balance":
@@ -190,7 +212,7 @@ function resolveFocus(
         kind: "preparation",
         title: "Volumetric flask",
         description:
-          "Made up to the mark when a standard solution is prepared by volume. This experiment standardises by weighing and pipetting, so the flask stays in reserve.",
+          "Made up to the mark when a standard solution is prepared to an exact volume. The manual dilutes the working solution in a clean flask and standardises by weighing, so this flask stays in reserve.",
         section: null,
       };
     case "waste_container": {

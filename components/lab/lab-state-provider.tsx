@@ -19,7 +19,7 @@ import {
   type LabStateLoader,
 } from "./lab-action-controller";
 import { buildLabViewModel, type LabViewModel } from "./view-model";
-import type { PipetteStage } from "./svg/pipette-svg";
+import type { AliquotStage } from "./svg/graduated-cylinder-svg";
 
 /**
  * TWO kinds of state, deliberately kept apart (§29):
@@ -29,9 +29,10 @@ import type { PipetteStage } from "./svg/pipette-svg";
  *   with what the server returned.
  *
  *   UI-ONLY (`LabUiContext`): which tab is open, which apparatus is highlighted,
- *   whether the stopcock is turned, whether the flask is being swirled, and the
- *   half-typed text in the inputs. None of it is ever treated as a simulation
- *   result, and none of it survives a reload — because it does not need to.
+ *   whether the stopcock is turned, whether the flask is being swirled, how far
+ *   the guided aliquot transfer has got, and the half-typed text in the inputs.
+ *   None of it is ever treated as a simulation result, and none of it survives a
+ *   reload — because it does not need to.
  *
  * The view model is derived, memoised on the revision, so a hover or a tab change
  * cannot re-render the bench.
@@ -60,12 +61,17 @@ export interface LabUiContextValue {
   setSelectedReagentKey: (key: string | null) => void;
   selectedApparatusKey: string | null;
   setSelectedApparatusKey: (key: string | null) => void;
-  pipetteStage: PipetteStage;
-  setPipetteStage: (stage: PipetteStage) => void;
   /**
-   * Whether the pipette filler is attached. UI-ONLY like `pipetteStage`: it
-   * gates the guided draw/deliver steps in the panel, but the volume the
-   * server records still comes from the reading the student enters.
+   * Progress of the guided aliquot transfer (measure into the ware, then deliver
+   * into the flask). UI-ONLY: it gates the guided steps in the panel, but the
+   * volume the server records is still the reading the student enters.
+   */
+  aliquotStage: AliquotStage;
+  setAliquotStage: (stage: AliquotStage) => void;
+  /**
+   * Whether the pipette filler is attached. UI-ONLY, and only meaningful when
+   * the configuration names a pipette as the aliquot vessel — a measuring
+   * cylinder has no filler, and the panel does not offer one.
    */
   fillerAttached: boolean;
   setFillerAttached: (attached: boolean) => void;
@@ -113,7 +119,7 @@ export function LabStateProvider({
   const [swirl, setSwirl] = useState(false);
   const [selectedReagentKey, setSelectedReagentKey] = useState<string | null>(null);
   const [selectedApparatusKey, setSelectedApparatusKey] = useState<string | null>(null);
-  const [pipetteStage, setPipetteStage] = useState<PipetteStage>("resting");
+  const [aliquotStage, setAliquotStage] = useState<AliquotStage>("resting");
   const [fillerAttached, setFillerAttached] = useState(false);
   const [focusedApparatus, setFocusedApparatus] = useState<string | null>(null);
 
@@ -176,8 +182,8 @@ export function LabStateProvider({
     setSelectedReagentKey: selectReagent,
     selectedApparatusKey,
     setSelectedApparatusKey: selectApparatus,
-    pipetteStage,
-    setPipetteStage,
+    aliquotStage,
+    setAliquotStage,
     fillerAttached,
     setFillerAttached,
     focusedApparatus,

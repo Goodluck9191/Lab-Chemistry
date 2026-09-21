@@ -3,17 +3,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { LabActionOutcome } from "@/application/attempts/lab-transport";
+import { SIMULATION_PROTOCOL_VERSION } from "@/domain/simulation/titration/protocol";
+import type { TitrationProtocolAction } from "@/domain/simulation/titration/protocol";
+import { dispatchTitrationAction } from "@/domain/simulation/titration/dispatch";
+import { setupApparatus, toPublicJSON, type TitrationSession } from "@/domain/simulation/titration/engine";
 import { ActionPanel } from "@/components/lab/action-panel";
 import { LabBench } from "@/components/lab/lab-bench";
 import { PreparationControls } from "@/components/lab/preparation-controls";
-import { setupApparatus } from "@/domain/simulation/titration/engine";
+import { TitrationControls } from "@/components/lab/titration-controls";
 import { labStateViewFor } from "../helpers/lab-fixture";
 import { okOutcome, renderLabPanels } from "../helpers/lab-render";
 import {
   concordantStageASession,
   freshSession,
   overshotStageASession,
+  provisionStageA,
   publicStateOf,
+  runTrial,
   setup,
   STAGE_A,
   STAGE_B,
@@ -37,8 +43,29 @@ function stageBReady() {
   return session;
 }
 
-describe("pipette guided flow (jsdom)", () => {
-  it("walks attach, draw, deliver and records the entered volume", async () => {
+/**
+ * A send mock that applies the incoming action to a live engine session
+ * through the real dispatch path and returns the new public state — the
+ * server in miniature, so multi-step UI journeys advance honestly.
+ */
+function liveSend(session: TitrationSession) {
+  let revision = 4;
+  return vi.fn<(input: unknown) => Promise<LabActionOutcome>>(async (input) => {
+    const action = (input as { action: TitrationProtocolAction }).action;
+    const outcome = dispatchTitrationAction(session, "exp-02", action);
+    revision += 1;
+    return okOutcome(toPublicJSON(session), revision, {
+      accepted: outcome.accepted,
+      code: outcome.code,
+      message: outcome.message,
+      colour: outcome.colour,
+      calculationCorrect: outcome.calculationCorrect,
+    });
+  });
+}
+
+describe("measuring cylinder guided flow (jsdom)", () => {
+  it("walks measure, deliver and records the entered volume", async () => {
     const user = userEvent.setup();
     const session = stageBReady();
     const state = labStateViewFor(session);
@@ -48,20 +75,14 @@ describe("pipette guided flow (jsdom)", () => {
 
     renderLabPanels({ state, send, panels: <PreparationControls initialState={state} /> });
 
-    // Filler first: drawing is impossible while it sits off the pipette.
-    expect(screen.getByText(/filler not attached/i)).toBeTruthy();
-    expect(screen.getByText(/attach the pipette filler/i)).toBeTruthy();
-    expect(screen.getByRole("button", { name: /draw up solution/i })).toHaveProperty(
-      "disabled",
-      true,
-    );
+    // The manual names a measuring cylinder for the 25.00 mL aliquot, so the
+    // flow has no filler to attach and starts from an empty cylinder.
+    expect(screen.getByText(/measuring cylinder · empty/i)).toBeTruthy();
+    expect(screen.getByText(/pour the solution into the cylinder up to the mark/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /attach filler/i })).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: /attach filler/i }));
-    expect(screen.getByText(/filler attached/i)).toBeTruthy();
-    expect(screen.getByText(/draw the solution up to the mark/i)).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /draw up solution/i }));
-    expect(screen.getByText(/pipette.*filled/i)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /measure in the cylinder/i }));
+    expect(screen.getByText(/measuring cylinder · filled/i)).toBeTruthy();
     expect(screen.getByText(/deliver into the conical flask/i)).toBeTruthy();
 
     // Delivery gates the record step: the volume is entered, never generated.
@@ -75,14 +96,14 @@ describe("pipette guided flow (jsdom)", () => {
 
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     expect(send.mock.calls[0][0]).toMatchObject({
-      protocolVersion: 2,
+      protocolVersion: SIMULATION_PROTOCOL_VERSION,
       attemptId: state.attemptId,
       baseRevision: 4,
       action: { type: "pipette_analyte", stageKey: STAGE_B, observedVolumeMl: 25 },
     });
   });
 
-  it("selects the pipette from the bench without filling it", async () => {
+  it("selects the measuring cylinder from the bench without measuring anything", async () => {
     const user = userEvent.setup();
     const session = stageBReady();
     const state = labStateViewFor(session);
@@ -97,18 +118,20 @@ describe("pipette guided flow (jsdom)", () => {
       ),
     });
 
-    await user.click(screen.getByRole("button", { name: /pipette.*filler not attached/i }));
-    // Selection drives the contextual panel, but the pipette stays empty until
-    // the guided draw step runs.
-    expect(screen.getByText("Selected: Pipette the aliquot")).toBeTruthy();
-    expect(svgTitles().join("\n")).toMatch(/state: resting/i);
+    await user.click(screen.getByRole("button", { name: /measuring cylinder.*empty/i }));
+    // Selection drives the contextual panel, but the cylinder stays empty until
+    // the guided measure step runs.
+    expect(screen.getByText("Selected: Measure the aliquot")).toBeTruthy();
+    expect(svgTitles().join("\n")).toMatch(/measuring cylinder, 25 mL\. empty\./i);
   });
 
-  it("shows the filler state on the bench drawing", () => {
+  it("shows the cylinder state on the bench drawing", () => {
     const session = stageBReady();
     const state = labStateViewFor(session);
     renderLabPanels({ state, panels: <LabBench initialState={state} /> });
-    expect(svgTitles().join("\n")).toMatch(/filler not attached/i);
+    expect(svgTitles().join("\n")).toMatch(/measuring cylinder, 25 mL\. empty\./i);
+    // No pipette is drawn when the procedure calls for a cylinder.
+    expect(svgTitles().join("\n")).not.toMatch(/pipette/i);
   });
 });
 
@@ -148,34 +171,125 @@ describe("balance guided flow (jsdom)", () => {
 
     await user.click(screen.getByRole("button", { name: /add potassium/i }));
     expect(screen.getByText(/sample added/i)).toBeTruthy();
-    expect(screen.getByText(/enter the mass below/i)).toBeTruthy();
+    expect(screen.getByText(/enter each weighing below/i)).toBeTruthy();
   });
 
-  it("records the mass the student entered, independent of the guide", async () => {
+  it("records the two beaker weighings and derives the sample by difference", async () => {
     const user = userEvent.setup();
-    // Weighing requires the burette set up first (the engine's rule), so the
-    // session prepares it; the guide buttons are deliberately left untouched.
+    // The burette is set up so weighing is available; the guide buttons are
+    // deliberately left untouched: recording works from the readings alone.
     const session = freshSession();
     setup(session);
     const state = labStateViewFor(session);
-    const send = vi.fn<(input: unknown) => Promise<LabActionOutcome>>(async () =>
-      okOutcome(publicStateOf(session), 5),
-    );
+    const send = liveSend(session);
 
     renderLabPanels({ state, send, panels: <PreparationControls initialState={state} /> });
 
-    await user.type(screen.getByLabelText(/mass you obtained/i), "0.60");
-    await user.click(screen.getByRole("button", { name: /record mass/i }));
-
+    await user.type(screen.getByLabelText(/empty beaker mass/i), "52.34");
+    await user.click(screen.getByRole("button", { name: /record empty weighing/i }));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
-    expect(send.mock.calls[0][0]).toMatchObject({
-      action: { type: "weigh_analyte", stageKey: STAGE_A, observedMassG: 0.6 },
+
+    await user.type(screen.getByLabelText(/beaker plus KHP mass/i), "52.94");
+    await user.click(screen.getByRole("button", { name: /record KHP weighing/i }));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+
+    const actions = send.mock.calls.map((call) => (call[0] as { action: unknown }).action);
+    expect(actions).toEqual([
+      { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 },
+      { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.94 },
+    ]);
+    // The derived sample mass comes from the server state, not the inputs.
+    await waitFor(() => {
+      expect(screen.getByText(/KHP sample by difference: 0\.6 g/)).toBeTruthy();
     });
   });
 });
 
-describe("benchware participation (jsdom)", () => {
-  it("counts discarded trials into the waste container", () => {
+describe("preparation journey (jsdom)", () => {
+  it("walks the whole Part 2 preparation through the protocol, in order", async () => {
+    const user = userEvent.setup();
+    const session = freshSession();
+    const state = labStateViewFor(session);
+    const send = liveSend(session);
+
+    renderLabPanels({ state, send, panels: <PreparationControls initialState={state} /> });
+
+    // Part I first: measure the stock, dilute it, mix it — the burette work is
+    // served from the solution this makes.
+    await user.type(screen.getByLabelText(/stock solution measured/i), "10");
+    await user.click(screen.getByRole("button", { name: /record stock volume/i }));
+    await user.click(screen.getByRole("button", { name: /^add distilled water$/i }));
+    await user.click(screen.getByRole("button", { name: /stopper and swirl/i }));
+
+    await user.click(screen.getByRole("button", { name: /rinse with tap water/i }));
+    await user.click(screen.getByRole("button", { name: /obtain naoh in beaker/i }));
+    await user.click(screen.getByRole("button", { name: /condition with naoh \(0\/3\)/i }));
+    await user.click(screen.getByRole("button", { name: /condition with naoh \(1\/3\)/i }));
+    await user.click(screen.getByRole("button", { name: /condition with naoh \(2\/3\)/i }));
+    await user.type(screen.getByLabelText(/initial burette reading/i), "0.00");
+    await user.click(screen.getByRole("button", { name: /fill burette/i }));
+    await user.click(screen.getByRole("button", { name: /clear air bubble/i }));
+    await user.type(screen.getByLabelText(/empty beaker mass/i), "52.34");
+    await user.click(screen.getByRole("button", { name: /record empty weighing/i }));
+    await user.type(screen.getByLabelText(/beaker plus KHP mass/i), "52.94");
+    await user.click(screen.getByRole("button", { name: /record KHP weighing/i }));
+    await user.click(screen.getByRole("button", { name: /dissolve in water/i }));
+    await user.click(screen.getByRole("button", { name: /transfer to flask/i }));
+    await user.click(screen.getByRole("button", { name: /rinse beaker \(0\/2\)/i }));
+    await user.click(screen.getByRole("button", { name: /rinse beaker \(1\/2\)/i }));
+    await user.click(screen.getByRole("button", { name: /^add drops$/i }));
+    await user.click(screen.getByRole("button", { name: /^place under burette$/i }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(18));
+    const actions = send.mock.calls.map((call) => (call[0] as { action: unknown }).action);
+    expect(actions).toEqual([
+      { type: "measure_naoh_stock", stageKey: STAGE_A, observedVolumeMl: 10 },
+      { type: "dilute_naoh_solution", stageKey: STAGE_A },
+      { type: "mix_naoh_solution", stageKey: STAGE_A },
+      { type: "rinse_burette", stageKey: STAGE_A },
+      { type: "obtain_naoh_portion", stageKey: STAGE_A },
+      { type: "condition_burette", stageKey: STAGE_A },
+      { type: "condition_burette", stageKey: STAGE_A },
+      { type: "condition_burette", stageKey: STAGE_A },
+      { type: "setup_apparatus", stageKey: STAGE_A, titrantKey: "naoh", initialReadingMl: 0 },
+      { type: "clear_air_bubble", stageKey: STAGE_A },
+      { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 },
+      { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.94 },
+      { type: "dissolve_khp", stageKey: STAGE_A },
+      { type: "transfer_solution", stageKey: STAGE_A },
+      { type: "rinse_beaker", stageKey: STAGE_A },
+      { type: "rinse_beaker", stageKey: STAGE_A },
+      { type: "add_indicator", stageKey: STAGE_A, drops: 3 },
+      { type: "place_flask", stageKey: STAGE_A },
+    ]);
+    await waitFor(() => {
+      expect(screen.getByText(/KHP sample by difference: 0\.6 g/)).toBeTruthy();
+    });
+  });
+
+  it("discards a completed trial into waste before the next trial", async () => {
+    const user = userEvent.setup();
+    const session = freshSession();
+    provisionStageA(session);
+    runTrial(session, { trialNumber: 1, deliveredMl: 15 });
+    const state = labStateViewFor(session);
+    const send = liveSend(session);
+
+    renderLabPanels({ state, send, panels: <TitrationControls /> });
+
+    await user.click(screen.getByRole("button", { name: /discard into waste/i }));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0][0]).toMatchObject({
+      action: { type: "discard_to_waste", stageKey: STAGE_A },
+    });
+    // The spent solution is gone: the disposal offers itself only once.
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /discard into waste/i })).toBeNull();
+    });
+  });
+});
+
+describe("benchware participation (jsdom)", () => {  it("counts discarded trials into the waste container", () => {
     const state = labStateViewFor(overshotStageASession("waste-flow-seed"));
     renderLabPanels({ state, panels: <LabBench initialState={state} /> });
     expect(svgTitles().join("\n")).toMatch(/waste container — 1 discarded trial/i);

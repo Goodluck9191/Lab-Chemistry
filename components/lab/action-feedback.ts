@@ -95,6 +95,32 @@ export function feedbackForStart(action: LabActionInput): string {
       return "Submitting your calculation…";
     case "record_observation":
       return "Saving your observation…";
+    case "measure_naoh_stock":
+      return "Recording the volume of stock solution you measured…";
+    case "dilute_naoh_solution":
+      return "Adding distilled water to the dilution…";
+    case "mix_naoh_solution":
+      return "Stoppering and swirling to mix the working solution…";
+    case "obtain_naoh_portion":
+      return "Drawing a portion of the working solution into the beaker…";
+    case "rinse_burette":
+      return "Rinsing the burette with tap water…";
+    case "condition_burette":
+      return "Conditioning the burette with NaOH…";
+    case "clear_air_bubble":
+      return "Clearing the burette tip…";
+    case "weigh_beaker":
+      return "Recording the beaker weighing…";
+    case "dissolve_khp":
+      return "Dissolving the KHP…";
+    case "transfer_solution":
+      return "Transferring the solution to the flask…";
+    case "rinse_beaker":
+      return "Rinsing the beaker into the flask…";
+    case "place_flask":
+      return "Placing the flask under the burette…";
+    case "discard_to_waste":
+      return "Discarding into the waste container…";
     default:
       return "Saving…";
   }
@@ -236,6 +262,34 @@ export function feedbackForOutcome(input: {
       }
       return { tone: "info", message: submitted };
     }
+
+    case "measure_naoh_stock": {
+      const volume = numeric(action.observedVolumeMl);
+      return {
+        tone: "success",
+        message:
+          volume === null
+            ? "The stock volume you measured was recorded."
+            : `${ml(volume)} of stock solution measured and recorded for the dilution.`,
+      };
+    }
+
+    // Part I wording names the step, never a concentration: the procedure
+    // specifies no final strength for the prepared solution.
+    case "dilute_naoh_solution":
+      return { tone: "success", message: "Distilled water added to complete the dilution." };
+
+    case "mix_naoh_solution":
+      return {
+        tone: "success",
+        message: "The flask was stoppered and swirled, so the working solution is mixed.",
+      };
+
+    case "obtain_naoh_portion":
+      return {
+        tone: "success",
+        message: "A portion of the working solution is in the beaker, covered with a watch glass.",
+      };
 
     case "record_observation":
       return { tone: "success", message: "Your observation was saved." };

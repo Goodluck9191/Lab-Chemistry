@@ -101,9 +101,14 @@ describe("snapshot round-trip (autosave/resume)", () => {
   });
 
   it("numbers trial rows per stage within the 1..20 table range", () => {
+    // Each stage owns an EQUAL block of the 1..20 range, so a stage may run more
+    // attempts than it records (an overshoot is repeated) without its re-runs
+    // ever colliding with the next stage's first trial.
     expect(trialRowNumber(exp02TitrationConfig, STAGE_A, 1)).toBe(1);
-    expect(trialRowNumber(exp02TitrationConfig, STAGE_A, 4)).toBe(4);
-    expect(trialRowNumber(exp02TitrationConfig, STAGE_B, 1)).toBe(5);
+    expect(trialRowNumber(exp02TitrationConfig, STAGE_A, 8)).toBe(8);
+    expect(trialRowNumber(exp02TitrationConfig, STAGE_B, 1)).toBe(11);
+    expect(trialRowNumber(exp02TitrationConfig, STAGE_B, 8)).toBe(18);
+    expect(() => trialRowNumber(exp02TitrationConfig, STAGE_B, 11)).toThrow();
     const session = workedSession();
     const row = trialRowFor(exp02TitrationConfig, session.public.stages[STAGE_A].trials[0]);
     expect(row.trialNumber).toBe(1);

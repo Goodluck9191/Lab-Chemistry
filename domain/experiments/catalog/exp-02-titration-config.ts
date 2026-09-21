@@ -20,6 +20,16 @@ import { parseTitrationConfig, type TitrationExperimentConfig } from "@/domain/s
 const config = {
   experimentNumber: 2, // [MANUAL] Experiment 2
   nominalTitrantMolarityM: 0.2, // [MANUAL] "~0.2M NaOH" diluted from 2M stock
+  // [MANUAL] Part I: "Preparation of approximately 0.2 M NaOH from 2 M NaOH
+  // solution". Both strengths are stated in the procedure; the volume of stock
+  // the student measures is recorded as evidence of the step and deliberately
+  // feeds NO calculation — the working strength stays the nominal value above
+  // plus hidden truth, so no exact final concentration is invented.
+  solutionDilution: {
+    stockKey: "naoh_stock_2m",
+    stockMolarityM: 2,
+    nominalWorkingMolarityM: 0.2,
+  },
   hiddenRanges: {
     // [SIM] keeps every attempt within one 50 mL burette filling.
     titrantMolarityM: [0.18, 0.22],
@@ -72,6 +82,13 @@ const config = {
         kind: "pipetted_volume",
         nominalVolumeMl: 25.0, // [MANUAL] "approximately 25.00 mL of HCl"
         volumePrecisionMl: 0.02, // [MANUAL] volume "known to two decimal places"
+        // [MANUAL] "Using a measuring cylinder, transfer approximately
+        // 25.00 mL". The supplied text also mentions "initial and final acid
+        // burette readings" further down, but that contradicts its own
+        // instruction, so no second HCl burette is modelled. The vessel names
+        // the CATALOG apparatus row ("Graduated cylinder"); the laboratory's
+        // wording keeps the manual's "measuring cylinder".
+        vessel: "graduated_cylinder",
       },
       indicator: {
         key: "phenolphthalein",
@@ -93,6 +110,12 @@ const config = {
   trialRules: {
     minTrials: 3, // [MANUAL] "Repeat the titration procedure three times"
     maxTrials: 4, // [MANUAL] "perform a fourth titration" if spread too large
+    // [SIM] Attempts a stage may run, discarded overshoots included. The manual
+    // counts RECORDED trials (three, or a fourth if they disagree) and says an
+    // overshoot is discarded and repeated, so a discarded run must not consume
+    // the manual's budget — without this, two overshoots make the experiment
+    // impossible to finish. 8 leaves at most four recorded plus four repeats.
+    maxTrialAttempts: 8,
     discardOnOvershoot: true, // [MANUAL] overshoot -> "discard ... and repeat"
     concordance: {
       mode: "molarity",

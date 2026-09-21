@@ -25,9 +25,9 @@ protocol to the server, which owns the hidden reality. See
 | Attempts | A student can start an attempt (or resume the open one) and it is stored with a durable state row |
 | Domain model | Experiment, simulation, attempt and secrets contracts - configuration-driven, no per-experiment code |
 | Interface | Student and instructor shells, experiment library, briefing page, error/empty/loading states |
-| Laboratory | Experiment 2 laboratory at `/lab/exp-02/attempt/<id>`: SVG bench, burette with stopcock and meniscus, flask colour, balance, pipette, reagent tray, procedure checklist, trial table, concordance, observations, calculations, autosave status, resume |
+| Laboratory | Experiment 2 laboratory at `/lab/exp-02/attempt/<id>`: Part I working-solution preparation, SVG bench, burette with stopcock and meniscus, flask colour, balance, the measuring cylinder (or pipette) a procedure names for the aliquot, reagent tray, procedure checklist, trial table, concordance, observations, calculations, autosave status, resume |
 | Simulation | Generic configuration-driven titration engine; hidden per-attempt parameters in `attempt_secrets`; versioned action protocol; revision-guarded autosave; persisted trials, measurements, observations and calculation submissions |
-| Tests | 203 offline tests (domain, application, laboratory view model, transport, component tests in jsdom, migration audit, secret hygiene, laboratory exposure) plus live RLS/persistence/laboratory suites that run when credentials are supplied |
+| Tests | 363 offline tests (domain, application, laboratory view model, transport, component tests in jsdom, migration audit, seed conformance, secret hygiene, laboratory exposure) plus live RLS/persistence/laboratory suites that run when credentials are supplied |
 
 ### Not built yet
 
