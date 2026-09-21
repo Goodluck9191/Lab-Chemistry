@@ -314,3 +314,77 @@ export function projectExperimentWorkflow(
     canSubmit: blockers.length === 0,
   };
 }
+
+/**
+ * Conceptual experiment phase for the complete Experiment 2 workflow.
+ *
+ * These are DISPLAY labels for the procedure panel, derived from the same
+ * `ExperimentWorkflowStatus` projection above — never a second state machine.
+ * The UI renders this phase and sends protocol actions; the domain still owns
+ * every transition.
+ *
+ * `COMPLETED` is intentionally NOT returned here: completion is the attempt
+ * status after the server accepts submission (`submitAttempt`), not a workflow
+ * projection. The UI maps a submitted/frozen attempt to `COMPLETED`.
+ */
+export type ExperimentPhase =
+  | "PREPARATION"
+  | "APPARATUS_SETUP"
+  | "SOLUTION_PREPARATION"
+  | "TITRATION_READY"
+  | "TITRATION"
+  | "TRIAL_RECORDED"
+  | "NEXT_TRIAL"
+  | "CONCORDANCE"
+  | "CALCULATION"
+  | "NEXT_PART"
+  | "RESULT_REVIEW";
+
+/**
+ * Derive the current conceptual phase from public state plus the workflow
+ * projection. Pure and total: unknown stages project as not started.
+ */
+export function experimentPhaseFor(
+  config: WorkflowConfigInput,
+  publicState: TitrationPublicState,
+  workflow: ExperimentWorkflowStatus,
+): ExperimentPhase {
+  if (workflow.allStagesComplete) {
+    return workflow.canSubmit ? "RESULT_REVIEW" : "RESULT_REVIEW";
+  }
+  const active = workflow.stages.find((stage) => !stage.complete) ?? workflow.stages[0];
+  if (!active) return "PREPARATION";
+
+  // Part I: the working solution is attempt-level and gates the first stage.
+  if (config.solutionDilution && active.index === 0) {
+    const solution = publicState.solution ?? emptyWorkingSolution();
+    if (solutionPreparationBlockers(config, solution).length > 0) {
+      const solutionStarted =
+        solution.stockVolumeMl !== null || solution.diluted || solution.mixed;
+      const anyStageWork = Object.values(publicState.stages).some(
+        (session) =>
+          session.preparation.buretteCleaned ||
+          session.preparation.conditioningRinses > 0 ||
+          session.trials.length > 0,
+      );
+      return solutionStarted || anyStageWork ? "SOLUTION_PREPARATION" : "PREPARATION";
+    }
+  }
+
+  if (!active.prepared) return "APPARATUS_SETUP";
+
+  const session = publicState.stages[active.key];
+  if (session?.openTrial) return "TITRATION";
+  if (active.recordedTrials > 0 && active.reportedTrials < active.recordedTrials) {
+    return "CALCULATION";
+  }
+  if (active.recordedTrials > 0 && active.recordedTrials < active.requiredTrials) {
+    // A recorded round is only truly closed once the flask is discarded.
+    return session?.preparation.lastTrialDiscarded === false ? "TRIAL_RECORDED" : "NEXT_TRIAL";
+  }
+  if (active.recordedTrials >= active.requiredTrials && !active.concordant) {
+    return "CONCORDANCE";
+  }
+  if (active.concordant) return "NEXT_PART";
+  return "TITRATION_READY";
+}

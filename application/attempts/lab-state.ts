@@ -22,6 +22,7 @@ import { createServerSupabaseClient } from "@/infrastructure/supabase/server";
 import { getExperimentBriefing } from "@/infrastructure/supabase/repositories/experiments";
 import { getReportForAttempt } from "@/infrastructure/supabase/repositories/attempts";
 import { loadTitrationAttempt } from "./apply-simulation-action";
+import { catalogNotices } from "./catalog-coverage";
 import { attemptIdSchema } from "./schemas";
 
 /**
@@ -146,56 +147,6 @@ function formulaGuidanceFor(stage: PublicStageView): LabFormulaGuidance {
         ? molarMassForChemical(stage.analyteKey)
         : null,
   };
-}
-
-/**
- * Compare the public catalog with the simulation configuration and describe any
- * mismatch in plain language. Nothing is invented: every notice is a fact about
- * the two sources this attempt actually runs on.
- */
-function catalogNotices(
-  briefing: ExperimentBriefing,
-  config: PublicTitrationConfigView,
-): string[] {
-  const notices: string[] = [];
-  const chemicalKeys = new Set(briefing.chemicals.map((chemical) => chemical.key));
-  const missingChemicals = new Set<string>();
-  const missingApparatus = new Set<string>();
-
-  // Part I draws on a stock solution as well as the working titrant.
-  if (config.solutionDilution && !chemicalKeys.has(config.solutionDilution.stockKey)) {
-    missingChemicals.add(config.solutionDilution.stockKey);
-  }
-
-  for (const stage of config.stages) {
-    if (!chemicalKeys.has(stage.titrantKey)) missingChemicals.add(stage.titrantKey);
-    if (!chemicalKeys.has(stage.analyteKey)) missingChemicals.add(stage.analyteKey);
-    // `vessel` is an apparatus key, so the check is exact: if the experiment
-    // does not list the ware its stage uses, the student is told.
-    const portion = stage.analytePortion;
-    if (
-      portion.kind === "pipetted_volume" &&
-      !briefing.apparatus.some((item) => item.key === portion.vessel)
-    ) {
-      missingApparatus.add(portion.vessel);
-    }
-  }
-
-  if (missingChemicals.size > 0) {
-    notices.push(
-      `The public experiment catalog does not list these reagents, which the simulation for this experiment uses: ${[
-        ...missingChemicals,
-      ].join(", ")}. The laboratory uses the manual-verified titration configuration; the catalog entry has not been updated to match.`,
-    );
-  }
-  if (missingApparatus.size > 0) {
-    notices.push(
-      `The public experiment catalog does not list the apparatus this stage needs (${[
-        ...missingApparatus,
-      ].join(", ")}). It is drawn on the bench from the titration configuration.`,
-    );
-  }
-  return notices;
 }
 
 /** Everything the view needs, already loaded and already safe to serialise. */

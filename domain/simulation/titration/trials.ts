@@ -153,7 +153,6 @@ export function evaluateConcordanceForRules(
     rules.concordance.minConcordantCount,
   );
 }
-
 /** Average of the two closest molarities (manual Part II reporting rule). */
 export function averageTwoClosest(values: number[]): number {
   const valid = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
@@ -169,4 +168,20 @@ export function averageTwoClosest(values: number[]): number {
     }
   }
   return roundTo((valid[bestI] + valid[bestI + 1]) / 2, 6);
+}
+
+/**
+ * Spread of the two closest molarities (manual fourth-trial reporting rule).
+ * Returns null with fewer than two finite values. Pure: used both by the
+ * concordance projection at the recorded-trial ceiling and by tests.
+ */
+export function closestPairSpread(values: number[]): number | null {
+  const valid = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (valid.length < 2) return null;
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i + 1 < valid.length; i += 1) {
+    const gap = valid[i + 1] - valid[i];
+    if (gap < best) best = gap;
+  }
+  return roundTo(best, 6);
 }

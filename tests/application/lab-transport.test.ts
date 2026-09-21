@@ -151,6 +151,58 @@ describe("laboratory action transport", () => {
     expect(outcome.message).not.toContain("seed");
   });
 
+  it("keeps the driver's own message for the operator, never as student copy", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const outcome = await runLabAction(
+        deps({
+          apply: vi.fn(async () => {
+            throw new Error(
+              "Failed to sync trial rows:\n permission denied for table experiment_trials",
+            );
+          }),
+        }),
+        { attemptId: ATTEMPT_ID },
+        input,
+      );
+
+      if (outcome.status !== "rejected") throw new Error("unreachable");
+      // The student gets the retryable copy…
+      expect(outcome.message).not.toMatch(/permission denied/);
+      // …and the development run gets the cause, on ONE line, so a storage
+      // failure is diagnosable instead of guessed at.
+      expect(outcome.detail).toContain("permission denied for table experiment_trials");
+      expect(outcome.detail).not.toMatch(/\n/);
+      expect(logged).toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("sends no cause at all in production, where a student cannot act on it", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const outcome = await runLabAction(
+        deps({
+          apply: vi.fn(async () => {
+            throw new Error("permission denied for table experiment_trials");
+          }),
+        }),
+        { attemptId: ATTEMPT_ID },
+        input,
+      );
+
+      if (outcome.status !== "rejected") throw new Error("unreachable");
+      expect(outcome.detail).toBeNull();
+      // The server still records it: hiding it from the browser is not hiding it.
+      expect(logged).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      logged.mockRestore();
+    }
+  });
+
   it("rethrows framework control-flow errors instead of hiding a redirect", async () => {
     const redirectError = Object.assign(new Error("NEXT_REDIRECT"), {
       digest: "NEXT_REDIRECT;replace;/login;307;",

@@ -308,7 +308,67 @@ export async function saveSnapshotConditional(
   return nextRevision;
 }
 
-/** Upserts trial projection rows (insert or replace by attempt + number). */
+// ---------------------------------------------------------------------------
+// Idempotent writes that respect the column-level grants
+//
+// WHY NOT `.upsert()`: PostgREST turns an upsert into
+//
+//   INSERT ... ON CONFLICT (<target>) DO UPDATE SET <every payload column>
+//
+// and PostgreSQL requires UPDATE privilege on EVERY column named in that SET
+// list — including the conflict-target identity columns (`attempt_id`,
+// `trial_number`, `step_key`, `field_key`, `question_key`). The RLS migrations
+// grant UPDATE only on the mutable columns, deliberately: identity is not
+// student data. The statement is therefore refused *even when no conflict
+// exists*, so the first row of a trial could never be stored and the whole
+// action failed while the snapshot save (a plain UPDATE) succeeded.
+//
+// Each row is therefore written in two privilege-safe steps: INSERT it if it is
+// absent (`ignoreDuplicates` → `ON CONFLICT DO NOTHING`, INSERT privilege
+// only), then UPDATE the mutable columns of the row that exists (UPDATE
+// privilege on exactly the granted columns). Both steps are idempotent, so
+// re-sending an action whose reply was lost converges on the same row.
+// ---------------------------------------------------------------------------
+
+interface IdempotentWrite {
+  table: string;
+  /** Comma-separated conflict target, e.g. "attempt_id,trial_number". */
+  onConflict: string;
+  /** Column/value equality filters that identify one row. */
+  identityOf: (row: Record<string, unknown>) => Record<string, unknown>;
+  /** Columns to update once the row exists — granted columns only. */
+  mutableOf: (row: Record<string, unknown>) => Record<string, unknown>;
+  errorLabel: string;
+}
+
+async function writeRowsIdempotently(
+  client: SupabaseClient,
+  rows: Array<Record<string, unknown>>,
+  write: IdempotentWrite,
+): Promise<void> {
+  if (rows.length === 0) return;
+
+  const { error: insertError } = await client
+    .from(write.table)
+    .upsert(rows, { onConflict: write.onConflict, ignoreDuplicates: true });
+  if (insertError) throw new Error(`${write.errorLabel}: ${insertError.message}`);
+
+  for (const row of rows) {
+    const patch = write.mutableOf(row);
+    if (Object.keys(patch).length === 0) continue;
+    let query = client.from(write.table).update(patch);
+    for (const [column, value] of Object.entries(write.identityOf(row))) {
+      query = query.eq(column, value);
+    }
+    const { error: updateError } = await query;
+    if (updateError) throw new Error(`${write.errorLabel}: ${updateError.message}`);
+  }
+}
+
+/**
+ * Writes the trial projection rows, keyed by attempt + number. Existing rows
+ * keep their identity and have their readings patched; new rows are inserted.
+ */
 export async function syncTrialRows(
   client: SupabaseClient,
   attemptId: string,
@@ -317,7 +377,8 @@ export async function syncTrialRows(
   const idsByNumber = new Map<number, string>();
   if (rows.length === 0) return idsByNumber;
 
-  const { error } = await client.from("experiment_trials").upsert(
+  await writeRowsIdempotently(
+    client,
     rows.map((row) => ({
       attempt_id: attemptId,
       trial_number: row.trialNumber,
@@ -329,10 +390,21 @@ export async function syncTrialRows(
       endpoint_observed: row.endpointObserved,
       rejection_reason: row.rejectionReason,
     })),
-    { onConflict: "attempt_id,trial_number" },
+    {
+      table: "experiment_trials",
+      onConflict: "attempt_id,trial_number",
+      errorLabel: "Failed to sync trial rows",
+      identityOf: (row) => ({ attempt_id: attemptId, trial_number: row.trial_number }),
+      mutableOf: (row) => ({
+        status: row.status,
+        initial_reading: row.initial_reading,
+        final_reading: row.final_reading,
+        titre_volume: row.titre_volume,
+        endpoint_observed: row.endpoint_observed,
+        rejection_reason: row.rejection_reason,
+      }),
+    },
   );
-
-  if (error) throw new Error(`Failed to sync trial rows: ${error.message}`);
 
   const { data, error: selectError } = await client
     .from("experiment_trials")
@@ -393,14 +465,18 @@ export async function appendMeasurementRows(
 }
 
 /** Upserts endpoint/indicator observations by (attempt, step, field). */
+/**
+ * Upserts the endpoint/indicator observations by (attempt, step, field): the row
+ * is inserted once and only its values are patched afterwards.
+ */
 export async function syncObservationRows(
   client: SupabaseClient,
   attemptId: string,
   trialIdsByNumber: Map<number, string>,
   rows: Array<ObservationRow & { trialRowNumber: number | null }>,
 ): Promise<void> {
-  if (rows.length === 0) return;
-  const { error } = await client.from("observations").upsert(
+  await writeRowsIdempotently(
+    client,
     rows.map((row) => ({
       attempt_id: attemptId,
       trial_id:
@@ -410,10 +486,18 @@ export async function syncObservationRows(
       text_value: row.textValue,
       choice_value: row.choiceValue,
     })),
-    { onConflict: "attempt_id,step_key,field_key" },
+    {
+      table: "observations",
+      onConflict: "attempt_id,step_key,field_key",
+      errorLabel: "Failed to sync observations",
+      identityOf: (row) => ({
+        attempt_id: attemptId,
+        step_key: row.step_key,
+        field_key: row.field_key,
+      }),
+      mutableOf: (row) => ({ text_value: row.text_value, choice_value: row.choice_value }),
+    },
   );
-
-  if (error) throw new Error(`Failed to sync observations: ${error.message}`);
 }
 
 /**
@@ -426,8 +510,8 @@ export async function syncCalculationRows(
   attemptId: string,
   rows: CalculationRow[],
 ): Promise<void> {
-  if (rows.length === 0) return;
-  const { error } = await client.from("calculation_submissions").upsert(
+  await writeRowsIdempotently(
+    client,
     rows.map((row) => ({
       attempt_id: attemptId,
       question_key: row.questionKey,
@@ -435,10 +519,18 @@ export async function syncCalculationRows(
       student_unit: row.studentUnit,
       attempt_number: row.attemptNumber,
     })),
-    { onConflict: "attempt_id,question_key" },
+    {
+      table: "calculation_submissions",
+      onConflict: "attempt_id,question_key",
+      errorLabel: "Failed to sync calculations",
+      identityOf: (row) => ({ attempt_id: attemptId, question_key: row.question_key }),
+      mutableOf: (row) => ({
+        student_value: row.student_value,
+        student_unit: row.student_unit,
+        attempt_number: row.attempt_number,
+      }),
+    },
   );
-
-  if (error) throw new Error(`Failed to sync calculations: ${error.message}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -524,20 +616,34 @@ export async function upsertReportDraft(
   attemptId: string,
   sections: ReportSections,
 ): Promise<void> {
-  const { error } = await client.from("reports").upsert(
+  await writeRowsIdempotently(
+    client,
+    [
+      {
+        attempt_id: attemptId,
+        status: "draft",
+        aim: sections.aim,
+        procedure: sections.procedure,
+        results_summary: sections.resultsSummary,
+        conclusion: sections.conclusion,
+        safety_notes: sections.safetyNotes,
+      },
+    ],
     {
-      attempt_id: attemptId,
-      status: "draft",
-      aim: sections.aim,
-      procedure: sections.procedure,
-      results_summary: sections.resultsSummary,
-      conclusion: sections.conclusion,
-      safety_notes: sections.safetyNotes,
+      table: "reports",
+      onConflict: "attempt_id",
+      errorLabel: "Failed to save report draft",
+      identityOf: () => ({ attempt_id: attemptId }),
+      mutableOf: (row) => ({
+        status: row.status,
+        aim: row.aim,
+        procedure: row.procedure,
+        results_summary: row.results_summary,
+        conclusion: row.conclusion,
+        safety_notes: row.safety_notes,
+      }),
     },
-    { onConflict: "attempt_id" },
   );
-
-  if (error) throw new Error(`Failed to save report draft: ${error.message}`);
 }
 
 /**
@@ -551,22 +657,38 @@ export async function submitReportForAttempt(
   sections: ReportSections,
   readingsSnapshot: Record<string, unknown>,
 ): Promise<void> {
-  const { error } = await client.from("reports").upsert(
+  await writeRowsIdempotently(
+    client,
+    [
+      {
+        attempt_id: attemptId,
+        status: "submitted",
+        aim: sections.aim,
+        procedure: sections.procedure,
+        results_summary: sections.resultsSummary,
+        conclusion: sections.conclusion,
+        safety_notes: sections.safetyNotes,
+        readings_snapshot: readingsSnapshot,
+        submitted_at: new Date().toISOString(),
+      },
+    ],
     {
-      attempt_id: attemptId,
-      status: "submitted",
-      aim: sections.aim,
-      procedure: sections.procedure,
-      results_summary: sections.resultsSummary,
-      conclusion: sections.conclusion,
-      safety_notes: sections.safetyNotes,
-      readings_snapshot: readingsSnapshot,
-      submitted_at: new Date().toISOString(),
+      table: "reports",
+      onConflict: "attempt_id",
+      errorLabel: "Failed to submit report",
+      identityOf: () => ({ attempt_id: attemptId }),
+      mutableOf: (row) => ({
+        status: row.status,
+        aim: row.aim,
+        procedure: row.procedure,
+        results_summary: row.results_summary,
+        conclusion: row.conclusion,
+        safety_notes: row.safety_notes,
+        readings_snapshot: row.readings_snapshot,
+        submitted_at: row.submitted_at,
+      }),
     },
-    { onConflict: "attempt_id" },
   );
-
-  if (error) throw new Error(`Failed to submit report: ${error.message}`);
 }
 
 /**

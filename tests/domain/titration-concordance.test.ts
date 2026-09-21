@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   averageTwoClosest,
+  closestPairSpread,
   evaluateMolarityConcordance,
   evaluateTitreConcordance,
 } from "@/domain/simulation/titration/trials";
@@ -25,5 +26,11 @@ describe("concordance", () => {
   it("averages the two closest molarities (manual Part II rule)", () => {
     expect(averageTwoClosest([0.2, 0.201, 0.209])).toBeCloseTo(0.2005, 6);
     expect(averageTwoClosest([0.19])).toBeCloseTo(0.19, 6);
+  });
+
+  it("measures the closest-pair spread for the fourth-trial rule", () => {
+    expect(closestPairSpread([0.2, 0.206, 0.212, 0.201])).toBeCloseTo(0.001, 6);
+    expect(closestPairSpread([0.2])).toBeNull();
+    expect(closestPairSpread([])).toBeNull();
   });
 });

@@ -35,10 +35,21 @@ import {
 
 export type SaveStatus = "idle" | "saving" | "saved" | "failed";
 
+/**
+ * Rejection codes that mean "nothing was stored": the student needs the reload
+ * action, so they are shown as dangers rather than as a quiet warning.
+ */
+const DANGER_CODES = new Set(["action_failed", "protocol_mismatch", "conflict_reload_failed"]);
+
 export interface LabNotice {
   tone: "info" | "success" | "warning" | "danger";
   title: string;
   message: string;
+  /**
+   * Operator-facing cause of a failure, shown under the message when the server
+   * supplied one (development only). Null otherwise.
+   */
+  detail?: string | null;
 }
 
 export interface LabControllerState {
@@ -80,7 +91,13 @@ type ReducerAction =
       message: string;
       at: string;
     }
-  | { type: "action_rejected"; message: string; tone: LabNotice["tone"]; title: string }
+  | {
+      type: "action_rejected";
+      message: string;
+      tone: LabNotice["tone"];
+      title: string;
+      detail?: string | null;
+    }
   | { type: "refresh_succeeded"; revision: number; publicState: TitrationPublicState }
   | { type: "notice_cleared" };
 
@@ -184,7 +201,12 @@ function reducer(state: LabControllerState, action: ReducerAction): LabControlle
         // Nothing was stored, so the stream goes quiet rather than leaving a
         // stale description of work the laboratory never did.
         lastFeedback: null,
-        notice: { tone: action.tone, title: action.title, message: action.message },
+        notice: {
+          tone: action.tone,
+          title: action.title,
+          message: action.message,
+          detail: action.detail ?? null,
+        },
       };
     case "refresh_succeeded":
       return {
@@ -282,11 +304,16 @@ export function useLabActionController({
           dispatch({
             type: "action_rejected",
             message: outcome.message,
-            tone: outcome.code === "protocol_mismatch" ? "danger" : "warning",
+            detail: outcome.detail,
+            // A failure to store or to reload is a danger: it needs the reload
+            // action. An engine refusal is a warning: the state is unchanged.
+            tone: DANGER_CODES.has(outcome.code) ? "danger" : "warning",
             title:
               outcome.code === "protocol_mismatch"
                 ? "Reload required"
-                : "The action was not saved",
+                : outcome.code === "action_failed"
+                  ? "Save failed"
+                  : "The action was not saved",
           });
         }
         return outcome;

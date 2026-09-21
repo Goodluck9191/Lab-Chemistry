@@ -63,9 +63,7 @@ export function ActionPanel({ initialState }: { initialState: LabStateView }) {
 
       {focus?.section}
 
-      {preparationIsFocused ? null : (
-        <FullPreparation initialState={initialState} />
-      )}
+      <FullPreparation initialState={initialState} />
       <FullTitration />
     </section>
   );
