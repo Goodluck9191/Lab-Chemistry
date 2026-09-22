@@ -7,12 +7,11 @@ import { SIMULATION_PROTOCOL_VERSION } from "@/domain/simulation/titration/proto
 import type { TitrationProtocolAction } from "@/domain/simulation/titration/protocol";
 import { dispatchTitrationAction } from "@/domain/simulation/titration/dispatch";
 import { setupApparatus, toPublicJSON, type TitrationSession } from "@/domain/simulation/titration/engine";
-import { ActionPanel } from "@/components/lab/action-panel";
-import { LabBench } from "@/components/lab/lab-bench";
 import { PreparationControls } from "@/components/lab/preparation-controls";
 import { TitrationControls } from "@/components/lab/titration-controls";
+
 import { labStateViewFor } from "../helpers/lab-fixture";
-import { okOutcome, renderLabPanels } from "../helpers/lab-render";
+import { okOutcome, renderLabPanels, renderLabWorld } from "../helpers/lab-render";
 import {
   concordantStageASession,
   freshSession,
@@ -32,9 +31,23 @@ vi.mock("@/application/attempts/actions", () => ({
 
 afterEach(cleanup);
 
-function svgTitles(): string[] {
-  return [...document.querySelectorAll("svg title")].map((node) => node.textContent ?? "");
+/**
+ * Mount the laboratory and open the contextual prompt, which is where the
+ * apparatus actions live now that the SVG bench is gone.
+ */
+async function openPrompt(
+  state: ReturnType<typeof labStateViewFor>,
+  send?: (input: unknown) => Promise<LabActionOutcome>,
+) {
+  const user = userEvent.setup();
+  renderLabWorld({ state, send });
+  await user.keyboard("{e}");
+  return user;
 }
+
+// jsdom cannot render WebGL; the world mounts to its error/loading state and
+// the HUD, prompt and drawers — every text surface — render for real.
+vi.setConfig({ testTimeout: 30_000 });
 
 /** Stage B active (A concordant) with its burette already set up. */
 function stageBReady() {
@@ -103,35 +116,32 @@ describe("measuring cylinder guided flow (jsdom)", () => {
     });
   });
 
-  it("selects the measuring cylinder from the bench without measuring anything", async () => {
-    const user = userEvent.setup();
+  it("picks the measuring cylinder without measuring anything", async () => {
     const session = stageBReady();
     const state = labStateViewFor(session);
+    const send = liveSend(session);
+    const user = await openPrompt(state, send);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <ActionPanel initialState={state} />
-        </>
-      ),
-    });
+    await user.click(screen.getByRole("button", { name: "Cylinder" }));
 
-    await user.click(screen.getByRole("button", { name: /measuring cylinder.*empty/i }));
-    // Selection drives the contextual panel, but the cylinder stays empty until
-    // the guided measure step runs.
-    expect(screen.getByText("Selected: Measure the aliquot")).toBeTruthy();
-    expect(svgTitles().join("\n")).toMatch(/measuring cylinder, 25 mL\. empty\./i);
+    // The cylinder is in hand, but it stays empty until the guided measure step
+    // runs: selecting it records nothing.
+    const prompt = screen.getByRole("dialog", { name: /contextual interaction prompt/i });
+    expect(prompt.textContent).toMatch(/measuring cylinder/i);
+    expect(screen.getByRole("button", { name: /record aliquot/i })).toHaveProperty("disabled", true);
+    expect(send).not.toHaveBeenCalled();
   });
 
-  it("shows the cylinder state on the bench drawing", () => {
+  it("uses the ware the procedure names, and never invents a pipette", async () => {
     const session = stageBReady();
     const state = labStateViewFor(session);
-    renderLabPanels({ state, panels: <LabBench initialState={state} /> });
-    expect(svgTitles().join("\n")).toMatch(/measuring cylinder, 25 mL\. empty\./i);
-    // No pipette is drawn when the procedure calls for a cylinder.
-    expect(svgTitles().join("\n")).not.toMatch(/pipette/i);
+    const user = await openPrompt(state);
+
+    await user.click(screen.getByRole("button", { name: "Cylinder" }));
+    const prompt = screen.getByRole("dialog", { name: /contextual interaction prompt/i });
+    expect(prompt.textContent).toMatch(/measuring cylinder — hcl aliquot/i);
+    // The manual measures the aliquot in a cylinder; nothing offers a pipette.
+    expect(document.body.textContent ?? "").not.toMatch(/pipette/i);
   });
 });
 
@@ -289,46 +299,39 @@ describe("preparation journey (jsdom)", () => {
   });
 });
 
-describe("benchware participation (jsdom)", () => {  it("counts discarded trials into the waste container", () => {
+describe("benchware participation (jsdom)", () => {
+  it("counts discarded trials into the waste container", async () => {
     const state = labStateViewFor(overshotStageASession("waste-flow-seed"));
-    renderLabPanels({ state, panels: <LabBench initialState={state} /> });
-    expect(svgTitles().join("\n")).toMatch(/waste container — 1 discarded trial/i);
+    const user = await openPrompt(state);
+
+    await user.click(screen.getByRole("button", { name: "Waste" }));
+    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+
+    // The discarded trial is reported in words, not only drawn as a fuller bin.
+    expect(screen.getByText(/1 trial discarded so far/i)).toBeTruthy();
+    expect(screen.getAllByText(/rejected: 1 \(excluded\)/i).length).toBeGreaterThan(0);
   });
 
   it("brings benchware guidance into the action panel on selection", async () => {
-    const user = userEvent.setup();
     const state = labStateViewFor(freshSession());
+    const user = await openPrompt(state);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <ActionPanel initialState={state} />
-        </>
-      ),
-    });
+    // The prompt sits over the world while the drawer hosts the full panel.
+    await user.click(screen.getByRole("button", { name: /^actions$/i }));
 
-    await user.click(screen.getByRole("button", { name: /beaker.*guidance/i }));
+    await user.click(screen.getByRole("button", { name: "Beaker" }));
     expect(screen.getByText("Selected: Beaker")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: /waste container.*guidance/i }));
+    await user.click(screen.getByRole("button", { name: "Waste" }));
     expect(screen.getByText("Selected: Waste container")).toBeTruthy();
   });
 
-  it("renders no hidden value from the session in the new instrument UI", () => {
+  it("renders no hidden value from the session in the new instrument UI", async () => {
     const session = stageBReady();
     const state = labStateViewFor(session);
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <PreparationControls initialState={state} />
-          <ActionPanel initialState={state} />
-        </>
-      ),
-    });
+    const user = await openPrompt(state);
+    await user.click(screen.getByRole("button", { name: "Cylinder" }));
+    await user.click(screen.getByRole("button", { name: /^actions$/i }));
 
     const text = document.body.textContent ?? "";
     expect(text).not.toContain("instrument-flow-seed");

@@ -19,7 +19,17 @@ import {
   type LabStateLoader,
 } from "./lab-action-controller";
 import { buildLabViewModel, type LabViewModel } from "./view-model";
-import type { AliquotStage } from "./svg/graduated-cylinder-svg";
+import type { AliquotStage } from "./aliquot-stage";
+import {
+  nextStopcockAngle,
+  stopcockIsOpen,
+  stopcockPositionFor,
+  type StopcockPosition,
+} from "./3d/simulation/stopcock";
+import type { CarryKind } from "./3d/interactions/carry";
+import { NO_ROTATION, rotateBy, type HeldRotation } from "./3d/simulation/keymap";
+import type { PhysicalSelectionKey } from "./3d/simulation/apparatus-state";
+import type { BenchPoint } from "./3d/simulation/spatial";
 
 /**
  * TWO kinds of state, deliberately kept apart (§29):
@@ -54,7 +64,51 @@ export interface LabUiContextValue {
   setActiveStageKey: (key: string) => void;
   /** Stage whose stopcock is currently open, or null. */
   stopcockOpenForStage: string | null;
+  /**
+   * Turn the stopcock on one notch. The valve has intermediate openings (§12),
+   * so this steps through them and wraps back to closed — the accessible
+   * equivalent of turning the handle by hand.
+   */
   toggleStopcock: (stageKey: string) => void;
+  /** Current handle angle in degrees for a stage; 0 when shut. */
+  stopcockAngleForStage: (stageKey: string) => number;
+  /** Set the handle angle directly — what the drag on the 3D valve reports. */
+  setStopcockAngleForStage: (stageKey: string, angleDeg: number) => void;
+  /**
+   * Where the vessels physically stand. UI-only bench positions, never
+   * chemistry: they decide whether the pour lands in the flask, and nothing
+   * else. The authoritative placement is still the server's `place_flask`.
+   */
+  flaskPos: BenchPoint | null;
+  setFlaskPos: (point: BenchPoint | null) => void;
+  beakerPos: BenchPoint | null;
+  setBeakerPos: (point: BenchPoint | null) => void;
+  /** Close inspection of the meniscus with the scale enlarged. */
+  readingMode: boolean;
+  setReadingMode: (reading: boolean) => void;
+  /** Visual stirring with the glass rod; the dissolution itself is recorded. */
+  stirring: boolean;
+  setStirring: (stirring: boolean) => void;
+  /** Which notch the valve is sitting on, for the prompt and the HUD. */
+  stopcockPositionForStage: (stageKey: string) => StopcockPosition;
+  /** The apparatus the crosshair is on right now, if any. */
+  lookedAtKey: PhysicalSelectionKey;
+  setLookedAtKey: (key: PhysicalSelectionKey) => void;
+  /** Vessel physically in the student's hand, if any. */
+  carried: CarryKind | null;
+  setCarried: (kind: CarryKind | null) => void;
+  /** How the carried object is turned in the hand (visual only). */
+  carriedRotation: HeldRotation;
+  rotateCarried: (direction: 1 | -1) => void;
+  /** Whether the contextual action card is open. */
+  promptOpen: boolean;
+  setPromptOpen: (open: boolean) => void;
+  /** Immersive first-person walking versus free orbit inspection. */
+  walkMode: boolean;
+  setWalkMode: (walk: boolean) => void;
+  /** Whether the browser has captured the pointer for mouse-look. */
+  pointerLocked: boolean;
+  setPointerLocked: (locked: boolean) => void;
   swirl: boolean;
   setSwirl: Dispatch<SetStateAction<boolean>>;
   selectedReagentKey: string | null;
@@ -78,6 +132,13 @@ export interface LabUiContextValue {
   /** Apparatus shown enlarged in the focus overlay, or null. UI-only. */
   focusedApparatus: string | null;
   setFocusedApparatus: (key: string | null) => void;
+  /**
+   * 3D camera focus request (immersive keyboard "F" support). UI-only: the
+   * scene applies the requested focus target and clears nothing — a new
+   * request supersedes the previous one via its id.
+   */
+  focusRequest: { key: "burette" | "flask" | "balance" | "cylinder" | null; id: number };
+  requestFocus: (key: "burette" | "flask" | "balance" | "cylinder" | null) => void;
 }
 
 const LabServerContext = createContext<LabServerContextValue | null>(null);
@@ -115,13 +176,35 @@ export function LabStateProvider({
     "";
 
   const [selectedStageKey, setSelectedStageKey] = useState<string | null>(null);
-  const [stopcockOpenForStage, setStopcockOpenForStage] = useState<string | null>(null);
+  // One valve position, remembered per stage: a student who steps away from the
+  // burette leaves the tap where they left it.
+  const [stopcockAngles, setStopcockAngles] = useState<Record<string, number>>({});
+  const [currentStopcockStage, setCurrentStopcockStage] = useState<string | null>(null);
+  const [lookedAtKey, setLookedAtKey] = useState<PhysicalSelectionKey>(null);
+  const [carried, setCarried] = useState<CarryKind | null>(null);
+  const [carriedRotation, setCarriedRotation] = useState<HeldRotation>(NO_ROTATION);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [walkMode, setWalkMode] = useState(true);
+  const [pointerLocked, setPointerLocked] = useState(false);
+  const [flaskPos, setFlaskPos] = useState<BenchPoint | null>(null);
+  const [beakerPos, setBeakerPos] = useState<BenchPoint | null>(null);
+  const [readingMode, setReadingMode] = useState(false);
+  const [stirring, setStirring] = useState(false);
   const [swirl, setSwirl] = useState(false);
   const [selectedReagentKey, setSelectedReagentKey] = useState<string | null>(null);
   const [selectedApparatusKey, setSelectedApparatusKey] = useState<string | null>(null);
   const [aliquotStage, setAliquotStage] = useState<AliquotStage>("resting");
   const [fillerAttached, setFillerAttached] = useState(false);
   const [focusedApparatus, setFocusedApparatus] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{
+    key: "burette" | "flask" | "balance" | "cylinder" | null;
+    id: number;
+  }>({ key: null, id: 0 });
+  const requestFocus = useCallback(
+    (key: "burette" | "flask" | "balance" | "cylinder" | null) =>
+      setFocusRequest((current) => ({ key, id: current.id + 1 })),
+    [],
+  );
 
   const activeStageKey = selectedStageKey ?? derivedStageKey;
 
@@ -170,12 +253,73 @@ export function LabStateProvider({
     if (key !== null) setSelectedReagentKey(null);
   }, []);
 
+  const toggleStopcock = useCallback((stageKey: string) => {
+    setCurrentStopcockStage(stageKey);
+    setStopcockAngles((current) => ({
+      ...current,
+      [stageKey]: nextStopcockAngle(current[stageKey] ?? 0),
+    }));
+  }, []);
+
+  const stopcockAngleForStage = useCallback(
+    (stageKey: string) => stopcockAngles[stageKey] ?? 0,
+    [stopcockAngles],
+  );
+
+  const stopcockPositionForStage = useCallback(
+    (stageKey: string) => stopcockPositionFor(stopcockAngles[stageKey] ?? 0),
+    [stopcockAngles],
+  );
+
+  const setStopcockAngleForStage = useCallback((stageKey: string, angleDeg: number) => {
+    setCurrentStopcockStage(stageKey);
+    setStopcockAngles((current) => ({ ...current, [stageKey]: angleDeg }));
+  }, []);
+
+  const rotateCarried = useCallback((direction: 1 | -1) => {
+    setCarriedRotation((current) => rotateBy(current, direction * (Math.PI / 12)));
+    // Rotation belongs to whatever is in the hand; letting go re-homes it.
+  }, []);
+
+  // A valve that is open on one stage closes the previous one: the student has
+  // exactly one open tap, matching the single physical burette on the bench.
+  const stopcockOpenForStage =
+    currentStopcockStage !== null && stopcockIsOpen(stopcockAngles[currentStopcockStage] ?? 0)
+      ? currentStopcockStage
+      : null;
+
   const uiValue: LabUiContextValue = {
     activeStageKey,
     setActiveStageKey: setSelectedStageKey,
     stopcockOpenForStage,
-    toggleStopcock: (stageKey) =>
-      setStopcockOpenForStage((current) => (current === stageKey ? null : stageKey)),
+    toggleStopcock,
+    stopcockAngleForStage,
+    setStopcockAngleForStage,
+    stopcockPositionForStage,
+    flaskPos,
+    setFlaskPos,
+    beakerPos,
+    setBeakerPos,
+    readingMode,
+    setReadingMode,
+    stirring,
+    setStirring,
+    lookedAtKey,
+    setLookedAtKey,
+    carried,
+    setCarried: (kind) => {
+      setCarried(kind);
+      // A new object arrives in the hand at its natural orientation.
+      setCarriedRotation(NO_ROTATION);
+    },
+    carriedRotation,
+    rotateCarried,
+    promptOpen,
+    setPromptOpen,
+    walkMode,
+    setWalkMode,
+    pointerLocked,
+    setPointerLocked,
     swirl,
     setSwirl,
     selectedReagentKey,
@@ -188,6 +332,8 @@ export function LabStateProvider({
     setFillerAttached,
     focusedApparatus,
     setFocusedApparatus,
+    focusRequest,
+    requestFocus,
   };
 
   return (

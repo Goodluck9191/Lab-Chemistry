@@ -41,8 +41,6 @@ export function ActionPanel({ initialState }: { initialState: LabStateView }) {
 
   const focus = resolveFocus(stage, selectedApparatusKey, selectedReagentKey, initialState);
 
-  const preparationIsFocused = focus !== null && focus.kind === "preparation";
-
   return (
     <section aria-label="Instrument actions" className="flex flex-col gap-2">
       {focus ? (

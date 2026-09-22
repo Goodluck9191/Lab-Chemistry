@@ -2,14 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { LabBench } from "@/components/lab/lab-bench";
-import { ActionPanel } from "@/components/lab/action-panel";
 import { ActionConsole } from "@/components/lab/action-console";
-import { FocusMode } from "@/components/lab/focus-mode";
 import { LabNotices } from "@/components/lab/lab-notices";
 import { TitrationControls } from "@/components/lab/titration-controls";
 import { labStateViewFor } from "../helpers/lab-fixture";
-import { okOutcome, renderLabPanels } from "../helpers/lab-render";
+import { okOutcome, renderLabPanels, renderLabWorld } from "../helpers/lab-render";
 import { addIndicator, startTrialAction, weighAnalyte } from "@/domain/simulation/titration/engine";
 import { STAGE_A, freshSession, publicStateOf, setup } from "../helpers/titration-fixtures";
 
@@ -25,6 +22,11 @@ vi.mock("next/link", () => ({
     <a href={href}>{children}</a>
   ),
 }));
+
+// WebGL never initialises in jsdom, so the world mounts as its loading state
+// while the HUD, the prompt and the drawers — the parts a student interacts
+// with by text — render for real.
+vi.setConfig({ testTimeout: 30_000 });
 
 afterEach(cleanup);
 
@@ -44,152 +46,137 @@ function titrating() {
   return session;
 }
 
-describe("selecting apparatus on the bench drives the action panel", () => {
-  it("brings the burette's controls into context when the burette is activated", async () => {
-    const user = userEvent.setup();
+/**
+ * Mount the laboratory and open the contextual prompt — the in-world surface
+ * that replaced the 2D bench's click targets. E is the documented key for it.
+ */
+async function openLab(
+  state: ReturnType<typeof labStateViewFor>,
+  send?: (input: unknown) => Promise<ReturnType<typeof okOutcome>>,
+) {
+  const user = userEvent.setup();
+  renderLabWorld({ state, send });
+  await user.keyboard("{e}");
+  expect(screen.getByRole("dialog", { name: /contextual interaction prompt/i })).toBeTruthy();
+  return user;
+}
+
+async function openActionsDrawer(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: /^actions$/i }));
+}
+
+describe("selecting apparatus in the laboratory drives the action panel", () => {
+  it("brings the burette's controls into context when the burette is picked", async () => {
     const state = labStateViewFor(prepared());
+    const user = await openLab(state);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <ActionPanel initialState={state} />
-        </>
-      ),
-    });
-
-    // Before any selection the panel says what to do instead of showing a focus.
-    expect(screen.getByText(/select an apparatus or reagent on the bench/i)).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /burette body/i }));
+    await user.click(screen.getByRole("button", { name: "Burette" }));
+    await openActionsDrawer(user);
 
     expect(screen.getByText(/^Selected: Prepare the burette$/)).toBeTruthy();
     expect(screen.getByText("In context")).toBeTruthy();
   });
 
   it("selects the burette from the keyboard as well as the pointer", async () => {
-    const user = userEvent.setup();
     const state = labStateViewFor(prepared());
+    const user = await openLab(state);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <ActionPanel initialState={state} />
-        </>
-      ),
-    });
-
-    screen.getByRole("button", { name: /burette body/i }).focus();
+    // The same picker button, reached by keyboard only.
+    const picker = screen.getByRole("button", { name: "Burette" });
+    picker.focus();
     await user.keyboard("{Enter}");
+    await openActionsDrawer(user);
+
     expect(screen.getByText(/^Selected: Prepare the burette$/)).toBeTruthy();
   });
 
   it("focuses the matching section for a reagent, the flask and the balance", async () => {
-    const user = userEvent.setup();
     const state = labStateViewFor(prepared());
+    const user = await openLab(state);
+    await openActionsDrawer(user);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <ActionPanel initialState={state} />
-        </>
-      ),
-    });
+    // With nothing picked, the panel says what to do instead of showing a focus.
+    expect(screen.getByText(/select an apparatus or reagent on the bench/i)).toBeTruthy();
 
     // The analyte bottle focuses the sample, not the burette.
-    await user.click(screen.getByRole("button", { name: /reagent bottle: potassium hydrogen phthalate/i }));
+    // Exact name: the picker button, not the action panel's "Add …" button.
+    await user.click(screen.getByRole("button", { name: "Potassium hydrogen phthalate" }));
     expect(screen.getByText(/^Selected: Measure the sample$/)).toBeTruthy();
 
-    // Activating the flask afterwards must repoint the panel: the apparatus the
+    // Picking the flask afterwards must repoint the panel: the apparatus the
     // student touched last is the one in context.
-    await user.click(screen.getByRole("button", { name: /conical flask/i }));
+    await user.click(screen.getByRole("button", { name: "Flask" }));
     expect(screen.getByText(/^Selected: Titrate in the flask$/)).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: /analytic(al)? balance/i }));
+    await user.click(screen.getByRole("button", { name: "Balance" }));
     expect(screen.getByText(/^Selected: Weigh the sample$/)).toBeTruthy();
   });
 });
 
-describe("burette focus mode", () => {
-  it("opens large, is named, and closes on Escape", async () => {
-    const user = userEvent.setup();
+describe("reading mode is the close-up of the burette scale", () => {
+  it("opens from the burette's context, is named, and closes on Escape", async () => {
     const state = labStateViewFor(titrating());
+    const user = await openLab(state);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <FocusMode initialState={state} />
-        </>
-      ),
-    });
+    expect(screen.queryByRole("dialog", { name: /record burette reading/i })).toBeNull();
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Burette" }));
+    await user.click(screen.getByRole("button", { name: /reading mode/i }));
 
-    await user.click(screen.getByRole("button", { name: /enlarge burette/i }));
-
-    const dialog = screen.getByRole("dialog");
-    expect(dialog.getAttribute("aria-modal")).toBe("true");
-    expect(screen.getByRole("heading", { name: /burette — 50 mL, graduated to 0\.1 mL/i })).toBeTruthy();
-    // It shows the scale, not a hidden endpoint: the meniscus value is the
-    // student's own reading carried through the view model.
-    expect(screen.getByText(/read the bottom of the curve against the scale/i)).toBeTruthy();
+    const dialog = screen.getByRole("dialog", { name: /record burette reading/i });
+    expect(dialog).toBeTruthy();
+    // It asks for the student's own reading of the meniscus — it never tells
+    // them the answer.
+    expect(screen.getByText(/read the bottom of the meniscus/i)).toBeTruthy();
 
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /record burette reading/i })).toBeNull(),
+    );
   });
 
-  it("closes when the backdrop is activated", async () => {
-    const user = userEvent.setup();
+  it("closes from its own control", async () => {
     const state = labStateViewFor(titrating());
+    const user = await openLab(state);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <FocusMode initialState={state} />
-        </>
-      ),
-    });
+    await user.click(screen.getByRole("button", { name: "Burette" }));
+    await user.click(screen.getByRole("button", { name: /reading mode/i }));
+    expect(screen.getByRole("dialog", { name: /record burette reading/i })).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: /enlarge burette/i }));
-    expect(screen.getByRole("dialog")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /close burette focus mode/i }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(screen.getByRole("button", { name: /back to lab/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /record burette reading/i })).toBeNull(),
+    );
   });
 });
 
-describe("the stopcock is operable from the bench", () => {
-  it("turns with the keyboard once a trial is running", async () => {
-    const user = userEvent.setup();
+describe("the stopcock is a valve, not a switch", () => {
+  it("steps through its openings once a trial is running", async () => {
     const state = labStateViewFor(titrating());
+    const user = await openLab(state);
 
-    renderLabPanels({ state, panels: <LabBench initialState={state} /> });
+    await user.click(screen.getByRole("button", { name: "Burette" }));
+    // The valve position is named both in the prompt and in the HUD.
+    expect(screen.getAllByText(/stopcock: closed/i).length).toBeGreaterThan(0);
 
-    const stopcock = screen.getByRole("button", { name: /burette stopcock: closed/i });
-    stopcock.focus();
-    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: /open the stopcock/i }));
 
-    expect(screen.getByRole("button", { name: /burette stopcock: open/i })).toBeTruthy();
+    // Cracked open, not slammed wide: the first notch is the slow one.
+    expect(screen.getAllByText(/stopcock: cracked open/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /turn the stopcock/i })).toBeTruthy();
   });
 
-  it("is not a control before a trial is running, and says why", () => {
+  it("is not a control before a trial is running, and says why", async () => {
     // Prepared but not titrating: the domain would refuse a delivery, so the
-    // stopcock explains itself instead of turning and doing nothing.
+    // valve explains itself instead of turning and doing nothing.
     const state = labStateViewFor(prepared());
+    const user = await openLab(state);
 
-    renderLabPanels({ state, panels: <LabBench initialState={state} /> });
+    await user.click(screen.getByRole("button", { name: "Burette" }));
 
-    expect(screen.queryByRole("button", { name: /burette stopcock/i })).toBeNull();
-    expect(screen.getByText(/add the indicator and start a trial before opening the stopcock/i)).toBeTruthy();
+    const valve = screen.getByRole("button", { name: /open the stopcock/i });
+    expect(valve).toHaveProperty("disabled", true);
+    expect(screen.getByText(/start a trial before opening the stopcock/i)).toBeTruthy();
   });
 });
 
@@ -259,7 +246,6 @@ describe("the console narrates the experiment", () => {
       send,
       panels: (
         <>
-          <LabBench initialState={state} />
           <TitrationControls />
           <ActionConsole />
         </>
@@ -299,7 +285,6 @@ describe("the console narrates the experiment", () => {
       send,
       panels: (
         <>
-          <LabBench initialState={state} />
           <TitrationControls />
           <LabNotices initialState={state} />
           <ActionConsole />
@@ -333,7 +318,6 @@ describe("the console narrates the experiment", () => {
       send,
       panels: (
         <>
-          <LabBench initialState={state} />
           <TitrationControls />
           <LabNotices initialState={state} />
           <ActionConsole />
@@ -365,7 +349,6 @@ describe("the console narrates the experiment", () => {
       send,
       panels: (
         <>
-          <LabBench initialState={state} />
           <TitrationControls />
           <ActionConsole />
         </>

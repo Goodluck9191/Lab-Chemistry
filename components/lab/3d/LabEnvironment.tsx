@@ -51,6 +51,38 @@ export function LabEnvironment() {
         <planeGeometry args={[2.6, 2.2]} />
         <meshStandardMaterial color="#ffffff" roughness={0.35} />
       </mesh>
+      {/* Bench understructure: it should look like a bench, not a floating slab. */}
+      <mesh position={[-3.4, -1.15, 0.4]} castShadow>
+        <boxGeometry args={[3.2, 1.7, 4.6]} />
+        <meshStandardMaterial color="#cbd5e1" roughness={0.85} />
+      </mesh>
+      <mesh position={[3.4, -1.15, 0.4]} castShadow>
+        <boxGeometry args={[3.2, 1.7, 4.6]} />
+        <meshStandardMaterial color="#cbd5e1" roughness={0.85} />
+      </mesh>
+      {/* Splash-back along the wall */}
+      <mesh position={[0, 0.35, -2.75]} receiveShadow>
+        <boxGeometry args={[10.4, 0.7, 0.12]} />
+        <meshStandardMaterial color="#e2e8f0" roughness={0.5} />
+      </mesh>
+      {/* Ceiling lamp fittings: the room is lit by something you can see. */}
+      {[-3.6, 0, 3.6].map((x) => (
+        <group key={x} position={[x, 4.4, -0.6]}>
+          <mesh>
+            <boxGeometry args={[1.5, 0.1, 0.42]} />
+            <meshStandardMaterial color="#e2e8f0" roughness={0.4} />
+          </mesh>
+          <mesh position={[0, -0.07, 0]}>
+            <boxGeometry args={[1.4, 0.06, 0.34]} />
+            <meshStandardMaterial
+              color="#f8fafc"
+              emissive="#f1f5f9"
+              emissiveIntensity={0.7}
+              roughness={0.2}
+            />
+          </mesh>
+        </group>
+      ))}
       {/* Soft grounding under the apparatus */}
       <ContactShadows position={[0, 0.02, 0]} opacity={0.42} scale={11} blur={2.4} far={4} />
     </group>

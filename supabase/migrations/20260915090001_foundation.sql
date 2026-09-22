@@ -44,6 +44,7 @@ alter table public.profiles enable row level security;
 create index profiles_role_idx on public.profiles (role);
 
 -- -----------------------------------------------------------------------------
+
 -- shared trigger function
 -- -----------------------------------------------------------------------------
 create or replace function public.set_updated_at()

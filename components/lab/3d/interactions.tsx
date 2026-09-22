@@ -3,7 +3,17 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import * as THREE from "three";
-import type { ZoneRect } from "./simulation/spatial";
+import {
+  BALANCE_SLOT,
+  BEAKER_SLOT,
+  BURETTE_TIP,
+  CYLINDER_SLOT,
+  FLASK_TILE_SLOT,
+  WASTE_SLOT,
+  type BenchPoint,
+  type ZoneRect,
+} from "./simulation/spatial";
+import type { PhysicalSelectionKey } from "./simulation/apparatus-state";
 
 /**
  * Shared 3D interaction primitives.
@@ -98,7 +108,6 @@ export function PlacementZone3D({
     </mesh>
   );
 }
-
 /** Small floating marker used while a drag is over a valid zone. */
 export function DropMarker({ position, valid }: { position: [number, number, number]; valid: boolean }) {
   const ref = useRef<THREE.Mesh>(null);
@@ -111,6 +120,52 @@ export function DropMarker({ position, valid }: { position: [number, number, num
     <mesh ref={ref} position={position}>
       <sphereGeometry args={[0.07, 16, 16]} />
       <meshBasicMaterial color={valid ? "#22c55e" : "#f59e0b"} />
+    </mesh>
+  );
+}
+
+/**
+ * Subtle task marker: a soft pulsing ring on the bench beneath the apparatus
+ * the current procedure step points at. Guidance without arrows — one ring,
+ * low opacity, hidden when there is nothing to point at. Positions come from
+ * the same slot constants the scene uses, so the ring can never drift from
+ * the apparatus (the flask ring follows the dragged flask).
+ */
+export function GuideMarker3D({
+  guideKey,
+  flaskPos,
+}: {
+  guideKey: Exclude<PhysicalSelectionKey, null> | null;
+  flaskPos: BenchPoint;
+}) {
+  const ref = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    if (ref.current) {
+      const material = ref.current.material as THREE.MeshBasicMaterial;
+      material.opacity = 0.28 + Math.sin(clock.elapsedTime * 2.2) * 0.12;
+    }
+  });
+  if (!guideKey) return null;
+  const at: BenchPoint =
+    guideKey === "burette"
+      ? { x: BURETTE_TIP.x, z: BURETTE_TIP.z }
+      : guideKey === "conical_flask"
+        ? flaskPos
+        : guideKey === "analytical_balance"
+          ? BALANCE_SLOT
+          : guideKey === "graduated_cylinder"
+            ? CYLINDER_SLOT
+            : guideKey === "beaker_250"
+              ? BEAKER_SLOT
+              : guideKey === "waste_container"
+                ? WASTE_SLOT
+                : guideKey === "reagent_bottle"
+                  ? { x: 2.4, z: 0.6 }
+                  : FLASK_TILE_SLOT;
+  return (
+    <mesh ref={ref} position={[at.x, 0.04, at.z]} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[0.5, 0.62, 40]} />
+      <meshBasicMaterial color="#eab308" transparent opacity={0.3} depthWrite={false} />
     </mesh>
   );
 }
