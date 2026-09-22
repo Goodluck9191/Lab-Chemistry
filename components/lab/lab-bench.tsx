@@ -1,11 +1,12 @@
 "use client";
 
-import { memo, useCallback, useId, useMemo } from "react";
+import { memo, useCallback, useId, useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Expand } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useActiveStage, useLabServer, useLabUi, useLabViewModel } from "./lab-state-provider";
+import { LabBench3D } from "./LabBench3D";
 import { ControlReason, describedBy } from "./control-reason";
 import {
   focusModeAvailability,
@@ -72,6 +73,10 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
     fillerAttached,
   } = useLabUi();
   const focusReasonId = `${useId()}-bench-focus-reason`;
+  // §41: the 2D bench stays until the 3D laboratory is verified. The student
+  // switches views; both render the SAME public state, so there is exactly one
+  // source of simulation truth either way.
+  const [view, setView] = useState<"2d" | "3d">("2d");
 
   const stopcockOpen = stopcockOpenForStage === activeStageKey;
   const interactive = canWrite && !pending;
@@ -161,6 +166,33 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2 text-xs" role="tablist" aria-label="Laboratory view">
+        <Button
+          size="sm"
+          variant={view === "2d" ? "primary" : "secondary"}
+          role="tab"
+          aria-selected={view === "2d"}
+          onClick={() => setView("2d")}
+        >
+          2D bench
+        </Button>
+        <Button
+          size="sm"
+          variant={view === "3d" ? "primary" : "secondary"}
+          role="tab"
+          aria-selected={view === "3d"}
+          onClick={() => setView("3d")}
+        >
+          3D laboratory
+        </Button>
+        {view === "3d" ? (
+          <span className="text-muted">Interactive 3D — same experiment state, same actions.</span>
+        ) : null}
+      </div>
+      {view === "3d" ? (
+        <LabBench3D initialState={initialState} />
+      ) : (
+      <>
       <div className="min-h-0 flex-1 overflow-x-auto rounded-md border border-line bg-surface">
         <svg
           viewBox={VIEW_BOX}
@@ -402,6 +434,8 @@ export function LabBench({ initialState }: { initialState: LabStateView }) {
           <ControlReason id={focusReasonId} reason={focus.reason} />
         </span>
       </div>
+      </>
+      )}
     </div>
   );
 }
