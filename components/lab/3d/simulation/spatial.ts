@@ -97,3 +97,14 @@ export function snapFlaskOnDrop(pos: BenchPoint): BenchPoint {
   if (flaskReceivingValid(pos)) return { ...FLASK_UNDER_BURETTE_SLOT };
   return pos;
 }
+
+/**
+ * Snap a dropped beaker: on the balance pan it clicks into the exact pan
+ * slot (so weighing reads as placed, not hovering); otherwise it stays where
+ * the student left it. Physical positioning only — the authoritative weighing
+ * is still the recorded `weigh_beaker` action.
+ */
+export function snapBeakerOnDrop(pos: BenchPoint): BenchPoint {
+  if (balancePlacementValid(pos)) return { ...BALANCE_SLOT };
+  return pos;
+}

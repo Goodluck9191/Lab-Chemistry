@@ -95,3 +95,51 @@ export const FIXED_SLOTS = {
   cylinder: { ...CYLINDER_SLOT },
   waste: { ...WASTE_SLOT },
 } satisfies Record<string, BenchPoint>;
+
+/**
+ * Which 3D apparatus the current procedure step points at, for the subtle
+ * task marker. Derived from the view model's next action (which itself comes
+ * from public state) — never from hidden values. Null means no marker: the
+ * student is reviewing, reporting, or done.
+ */
+export function guideTargetForNextAction(
+  kind: string | null | undefined,
+): PhysicalSelectionKey {
+  switch (kind) {
+    case "rinse_burette":
+    case "condition_burette":
+    case "setup_apparatus":
+    case "clear_air_bubble":
+    case "start_trial":
+    case "add_titrant":
+    case "read_burette":
+    case "complete_trial":
+    case "report_molarity":
+      return "burette";
+    case "weigh_beaker":
+    case "dissolve_khp":
+    case "transfer_solution":
+    case "rinse_beaker":
+      return "beaker_250";
+    case "obtain_naoh_portion":
+      return "beaker_250";
+    case "measure_stock":
+    case "pipette_analyte":
+      return "graduated_cylinder";
+    case "dilute_solution":
+    case "mix_solution":
+      return "volumetric_flask";
+    case "add_indicator":
+      return "reagent_bottle";
+    case "place_flask":
+      return "conical_flask";
+    case "discard_to_waste":
+      return "waste_container";
+    case "weigh_analyte":
+      return "analytical_balance";
+    case "record_observation":
+      return "conical_flask";
+    default:
+      return null;
+  }
+}

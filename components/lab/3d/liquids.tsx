@@ -121,6 +121,42 @@ export function FlaskLiquid({
 }
 
 /**
+ * Indicator droplet burst: three phenolphthalein drops falling from the
+ * dropper into the flask mouth right after the student adds the indicator.
+ * Rendered briefly (the caller owns the timer); deterministic phase offsets.
+ */
+export function IndicatorBurst3D({
+  active,
+  flaskPos,
+  mouthY,
+}: {
+  active: boolean;
+  flaskPos: { x: number; z: number };
+  mouthY: number;
+}) {
+  const group = useRef<THREE.Group>(null);
+  useFrame(({ clock }) => {
+    if (!group.current) return;
+    const t = clock.elapsedTime;
+    group.current.children.forEach((child, index) => {
+      const phase = ((t * 1.4 + index * 0.33) % 1 + 1) % 1;
+      child.position.set(flaskPos.x, mouthY + 0.9 - phase * 0.9, flaskPos.z);
+      child.scale.setScalar(0.04);
+    });
+  });
+  if (!active) return null;
+  return (
+    <group ref={group}>
+      {[0, 1, 2].map((i) => (
+        <mesh key={i}>
+          <sphereGeometry args={[1, 10, 10]} />
+          <meshBasicMaterial color="#f472b6" transparent opacity={0.95} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+/**
  * The falling stream from burette tip to flask mouth, with deterministic
  * droplets. Droplet i falls with a fixed phase offset — no random positions:
  * the stream always connects the actual tip to the actual receiving flask.

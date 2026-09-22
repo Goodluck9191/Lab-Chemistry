@@ -5,12 +5,14 @@ experiment on screen - preparing solutions, reading a burette, judging an endpoi
 trials until they agree, calculating results and submitting a report - and instructors review and
 mark the submissions.
 
-**Current status: Phase 4, the interactive laboratory.** Experiment 2 runs on a
-server-authoritative titration engine with a 2D SVG bench: the student prepares the solution, fills
-and reads the burette, titrates to the endpoint, repeats trials to concordance, records
-observations and submits calculations - every interaction travelling through one versioned action
-protocol to the server, which owns the hidden reality. See
-[Phase 4 boundary](#phase-4-boundary).
+**Current status: Phase 5, the immersive 3D laboratory.** The student laboratory is a full-screen
+3D chemistry laboratory and nothing else: the viewport is the room, the camera is the student's
+own, and the apparatus is picked up, carried, set down and operated by hand. Experiment 2 runs on
+the same server-authoritative titration engine as before - the student prepares the solution, mounts
+and fills the burette, turns the stopcock, titrates to the endpoint, repeats trials to concordance,
+records observations and submits calculations - every gesture travelling through one versioned
+action protocol to the server, which owns the hidden reality. The 2D SVG bench is gone from the
+student experience. See [Phase 5 boundary](#phase-5-boundary).
 
 ---
 
@@ -25,9 +27,9 @@ protocol to the server, which owns the hidden reality. See
 | Attempts | A student can start an attempt (or resume the open one) and it is stored with a durable state row |
 | Domain model | Experiment, simulation, attempt and secrets contracts - configuration-driven, no per-experiment code |
 | Interface | Student and instructor shells, experiment library, briefing page, error/empty/loading states |
-| Laboratory | Experiment 2 laboratory at `/lab/exp-02/attempt/<id>`: Part I working-solution preparation, SVG bench, burette with stopcock and meniscus, flask colour, balance, the measuring cylinder (or pipette) a procedure names for the aliquot, reagent tray, procedure checklist, trial table, concordance, observations, calculations, autosave status, resume |
+| Laboratory | Experiment 2 laboratory at `/lab/exp-02/attempt/<id>`: a full-screen 3D room (`react-three-fiber`) with a first-person camera, a bench, shelves, a balance and a waste container, real glassware at believable scale, a burette on a stand with a turnable stopcock, flowing liquid and a readable meniscus. Part I working-solution preparation, flask colour, the measuring cylinder named for the aliquot, picking up and placing vessels, weighing the sample, concordance, observations, calculations, autosave status and resume all happen in the room. A minimal HUD and contextual prompts replace the old sidebars; procedure, actions and results are transient drawers |
 | Simulation | Generic configuration-driven titration engine; hidden per-attempt parameters in `attempt_secrets`; versioned action protocol; revision-guarded autosave; persisted trials, measurements, observations and calculation submissions |
-| Tests | 363 offline tests (domain, application, laboratory view model, transport, component tests in jsdom, migration audit, seed conformance, secret hygiene, laboratory exposure) plus live RLS/persistence/laboratory suites that run when credentials are supplied |
+| Tests | 473 offline tests (domain, application, laboratory view model, transport, component tests in jsdom, migration audit, seed conformance, secret hygiene, laboratory exposure) plus live RLS/persistence/laboratory suites that run when credentials are supplied |
 
 ### Not built yet
 
@@ -35,8 +37,10 @@ Submission and grading of a completed attempt (the domain lifecycle and the data
 the use case does not), automatic marking against the rubric, the report editor, instructor marking
 screens, PDF export, the remaining experiments, and the manual-verified migration of the Experiment 2
 catalog row. The intermediate moles calculation has no submission action, so the laboratory presents
-it as unmarked guidance rather than pretending to check it. Three.js is explicitly out of scope:
-the bench is SVG.
+it as unmarked guidance rather than pretending to check it. The 3D laboratory draws its apparatus
+procedurally (`three.js` primitives and materials, no GLB assets to download) and uses Rapier only
+for placement confirmation, so a device without WebGL falls back to a labelled message and the
+keyboard-reachable drawers rather than a blank screen.
 
 ---
 
@@ -216,7 +220,7 @@ for "verified secure":
 has NOT been verified against a real database.
 ```
 
-## Phase 4 boundary
+## Phase 5 boundary
 
 The laboratory is complete for Experiment 2 and deliberately stops there. What the engine and the
 configuration already support is wired end to end; what they do not support is stated in the
@@ -233,3 +237,9 @@ interface rather than faked:
   the configuration instead.
 - **Chemicals stay as they are.** The manual citation (`MUST NSCH 1103, pp.16-21`) is referenced in
   code comments only; no new chemistry facts were added for this phase.
+- **The 3D layer is presentation and gesture only.** It never computes chemistry, never reads a
+  hidden value and never writes to the database directly: a gesture becomes a protocol action, and
+  the server's answer becomes the picture. Volumes drawn in glass are estimates of public state.
+- **Simplified physics by design.** Liquids are state-driven volumes and procedural streams rather
+  than fluid simulation, and Rapier confines itself to bench contact and the receiving-zone sensor;
+  a physics failure degrades to the geometric placement rules instead of breaking the room.

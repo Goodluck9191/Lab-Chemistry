@@ -2,25 +2,27 @@
 
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import type { LabStateView } from "@/application/attempts/lab-state";
 import { useActiveStage, useLabServer, useLabUi } from "./lab-state-provider";
-import { stopcockAvailability } from "./control-availability";
+import { stopcockAvailability, discardAvailability } from "./control-availability";
 import {
-  FLOW_MODES,
   accumulateFlowTick,
   quantizeDeliveryMl,
   shouldStopFlow,
   type FlowMode,
 } from "./3d/simulation/flow";
+import { stopcockIsOpen, stopcockFlowModeFor, stopcockRateMlPerSecond } from "./3d/simulation/stopcock";
+import { releasePointFor } from "./3d/interactions/carry";
 import {
   FLASK_TILE_SLOT,
   FLASK_UNDER_BURETTE_SLOT,
   flaskReceivingValid,
+  wastePlacementValid,
   type BenchPoint,
 } from "./3d/simulation/spatial";
 import {
+  FIXED_SLOTS,
+  guideTargetForNextAction,
   resolveFlaskPosition,
   type ApparatusFocusKey,
   type PhysicalSelectionKey,
@@ -28,21 +30,24 @@ import {
 import type { Lab3DSceneProps } from "./3d/Lab3DScene";
 
 /**
- * The 3D laboratory bench: real-time interactive visualisation over the SAME
- * authoritative state as the 2D bench.
+ * The 3D laboratory world.
  *
- * AUTHORITY: every prop into the Canvas is derived from the public view model.
- * The scene reports gestures (select / toggle / drop) back through callbacks;
- * chemistry changes travel ONLY through the existing action protocol via
- * `perform()` — the same `setup_apparatus`, `add_titrant`, `place_flask`…
- * actions the panels send. The 3D layer never writes Supabase directly and
- * never sees hidden values.
+ * This component owns NO chrome. It is the canvas, the interaction wiring and
+ * the derivations from public state — the HUD, the contextual prompt and the
+ * drawers live beside it in `ImmersiveLab`. That separation is what makes the
+ * laboratory the whole screen instead of a panel inside a dashboard.
  *
- * The pour interaction: opening the 3D stopcock starts a deterministic local
- * accumulation (flow mode × elapsed time, quantized to the burette
- * graduation). Closing it sends ONE `add_titrant` with that volume. Picking
- * the volume this way is exactly as authoritative as the panel's delivery
- * buttons — the server validates the volume and computes the colour.
+ * AUTHORITY: every prop into the Canvas comes from the public view model. The
+ * scene reports gestures (look / select / drag / turn the valve) back through
+ * callbacks; chemistry changes travel ONLY through the existing action protocol
+ * via `perform()` — the same actions the panels send. The 3D layer never writes
+ * Supabase directly and never sees a hidden value.
+ *
+ * THE POUR: the stopcock is a valve with intermediate openings (§12). While it
+ * stands open on a live trial, a deterministic local accumulation runs at the
+ * rate that opening passes; shutting it sends ONE `add_titrant` with that
+ * volume, quantized to the burette graduation. Choosing the volume this way is
+ * exactly as authoritative as a panel increment — the server validates it.
  */
 
 const Lab3DCanvas = dynamic(
@@ -51,10 +56,10 @@ const Lab3DCanvas = dynamic(
     ssr: false,
     loading: () => (
       <div
-        className="flex h-full min-h-[420px] items-center justify-center text-sm text-muted"
+        className="flex h-full items-center justify-center text-sm text-muted"
         role="status"
       >
-        3D laboratory loading…
+        Entering the laboratory…
       </div>
     ),
   },
@@ -71,13 +76,11 @@ class SceneErrorBoundary extends Component<{ children: ReactNode }, { failed: bo
   render() {
     if (this.state.failed) {
       return (
-        <div
-          className="flex h-full min-h-[420px] flex-col items-center justify-center gap-2 p-6 text-center"
-          role="alert"
-        >
+        <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" role="alert">
           <p className="text-sm font-medium">The 3D laboratory could not start on this device.</p>
-          <p className="text-xs text-muted">
-            Your progress is safe — switch back to the 2D bench to continue the experiment.
+          <p className="max-w-md text-xs text-muted">
+            WebGL is unavailable here. Your progress is safe, and every step is still reachable from
+            the Actions and Results drawers — this device just cannot draw the room.
           </p>
         </div>
       );
@@ -87,9 +90,7 @@ class SceneErrorBoundary extends Component<{ children: ReactNode }, { failed: bo
 }
 
 /** Visual estimate of flask contents for drawing the liquid level ONLY. */
-function estimateFlaskVolumeMl(
-  stage: NonNullable<ReturnType<typeof useActiveStage>>,
-): number {
+function estimateFlaskVolumeMl(stage: NonNullable<ReturnType<typeof useActiveStage>>): number {
   let volume = 0;
   if (stage.portion.kind === "weighed_mass") {
     if (stage.preparationState.khpTransferred) {
@@ -103,35 +104,98 @@ function estimateFlaskVolumeMl(
   return Math.min(250, volume);
 }
 
+/**
+ * Transient action visual: turns on briefly when `watchKey` changes (i.e. the
+ * server confirmed new state), then off. Drives the rinse pour, indicator
+ * droplets and waste pulse — visible confirmation of an accepted action, never
+ * a simulation value.
+ */
+function useActionFlash(watchKey: string, ms = 2000): boolean {
+  const [active, setActive] = useState(false);
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    setActive(true);
+    const id = window.setTimeout(() => setActive(false), ms);
+    return () => window.clearTimeout(id);
+  }, [watchKey, ms]);
+  return active;
+}
+
 export function LabBench3D({ initialState }: { initialState: LabStateView }) {
   const stage = useActiveStage();
   const model = useLabServer();
   const { canWrite, pending, perform } = model;
   const {
     activeStageKey,
-    stopcockOpenForStage,
-    toggleStopcock,
+    stopcockAngleForStage,
+    setStopcockAngleForStage,
     swirl,
     setSelectedReagentKey,
     setSelectedApparatusKey,
     selectedApparatusKey,
+    focusRequest,
+    flaskPos: flaskBenchPos,
+    setFlaskPos: setFlaskBenchPos,
+    beakerPos: beakerBenchPos,
+    setBeakerPos: setBeakerBenchPos,
+    readingMode,
+    lookedAtKey,
+    setLookedAtKey,
+    carried,
+    carriedRotation,
+    walkMode,
+    stirring,
+    setPointerLocked,
   } = useLabUi();
 
-  // ---- Physical (UI-only) state -------------------------------------------
-  const [flaskBenchPos, setFlaskBenchPos] = useState<BenchPoint | null>(null);
-  const [flowMode, setFlowMode] = useState<FlowMode>("MEDIUM");
-  const [focus, setFocus] = useState<ApparatusFocusKey>(null);
-  const [readingMode, setReadingMode] = useState(false);
-  const [resetSignal, setResetSignal] = useState(0);
+  const [valveDragging, setValveDragging] = useState(false);
   const [selection3D, setSelection3D] = useState<PhysicalSelectionKey>(null);
-  const [stirring, setStirring] = useState(false);
   const [accumulatedMl, setAccumulatedMl] = useState(0);
   const [swirlPhase, setSwirlPhase] = useState(0);
   /** Rapier sensor confirmation of the receiving zone (display only). */
   const [physicsInside, setPhysicsInside] = useState(false);
   const sending = useRef(false);
+  /** Latest camera-derived landing spot for a carried vessel (no re-render). */
+  const dropPointRef = useRef<BenchPoint>({ ...FIXED_SLOTS.beaker });
+  const carriedBefore = useRef<typeof carried>(null);
 
-  const stopcockOpen = stopcockOpenForStage === activeStageKey;
+  // Transient confirmations of accepted actions (visual only, ~2 s each).
+  const rinseFlash = useActionFlash(
+    `rinse:${stage?.preparationState.buretteCleaned ?? false}:${stage?.preparationState.conditioningRinses ?? 0}`,
+  );
+  const indicatorBurst = useActionFlash(`indicator:${stage?.indicator.dropsAdded ?? "none"}`);
+  const wasteWatchKey = stage
+    ? `waste:${stage.concordance.discardedTrials.length + stage.preparationState.wasteDiscards}`
+    : "waste:none";
+  const wastePulse = useActionFlash(wasteWatchKey);
+
+  // Keyboard "F" support from the immersive shell arrives as a context request.
+  // Focus is DERIVED during render: an external request wins while it is newer
+  // than the last manual (mesh/toolbar) selection, otherwise the manual
+  // selection stands — no effect-sync needed.
+  const [manualFocus, setManualFocus] = useState<{
+    key: ApparatusFocusKey;
+    seenRequestId: number;
+  } | null>(null);
+  const focusRequestId = focusRequest.id;
+  const setFocus = useCallback(
+    (key: ApparatusFocusKey) => {
+      setManualFocus({ key, seenRequestId: focusRequestId });
+    },
+    [focusRequestId],
+  );
+  const focus =
+    focusRequestId > 0 && focusRequestId > (manualFocus?.seenRequestId ?? 0)
+      ? focusRequest.key
+      : (manualFocus?.key ?? null);
+
+  const stopcockAngle = stopcockAngleForStage(activeStageKey);
+  const stopcockOpen = stopcockIsOpen(stopcockAngle);
+  const flowMode: FlowMode = stopcockFlowModeFor(stopcockAngle) ?? "MEDIUM";
   const interactive = canWrite && !pending;
 
   const stopcockRule = stage ? stopcockAvailability(stage, { canWrite, pending, stopcockOpen }) : null;
@@ -151,8 +215,8 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
   const graduationMl = stage?.burette.graduationMl ?? 0.1;
   const buretteRemainingMl = readingMl === null ? 0 : Math.max(0, capacityMl - readingMl);
 
-  // The open path: same condition as the 2D bench, plus the flask physically
-  // under the tip — otherwise the pour would miss the vessel.
+  // The open path: the valve is off its seat, a trial is running, the burette
+  // is prepared, and the flask is physically under the tip.
   const pathOpen =
     stopcockOpen && trialOpen && buretteSetup && interactive && flaskInReceiving && readingMl !== null;
 
@@ -164,27 +228,27 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
   }, [swirl]);
 
   // ---- Flow accumulation loop ----------------------------------------------
-  // While the stopcock stands open on a live trial, accumulate the pour at the
-  // selected flow-mode rate. Closing the stopcock confirms ONE `add_titrant`.
   useEffect(() => {
     if (!stage || !pathOpen) return;
+    const rate = stopcockRateMlPerSecond(stopcockAngle);
     const id = window.setInterval(() => {
-      setAccumulatedMl((current) => {
-        const tick = accumulateFlowTick({
+      setAccumulatedMl((current) =>
+        accumulateFlowTick({
           alreadyAccumulatedMl: current,
           deltaSeconds: 0.1,
           mode: flowMode,
           graduationMl,
           buretteRemainingMl,
-        });
-        return tick.rawMl;
-      });
+        }).rawMl,
+      );
     }, 100);
+    void rate;
     return () => window.clearInterval(id);
-  }, [stage, pathOpen, flowMode, graduationMl, buretteRemainingMl]);
+  }, [stage, pathOpen, flowMode, stopcockAngle, graduationMl, buretteRemainingMl]);
 
-  // Drop the unconfirmed preview whenever the server state moves on (a render-time
-  // adjustment, not an effect: the preview belongs to the previous revision).
+  // Drop the unconfirmed preview whenever the server state moves on (a
+  // render-time adjustment, not an effect: the preview belongs to the previous
+  // revision).
   const revision = model.state.revision;
   const [clearedRevision, setClearedRevision] = useState(revision);
   if (clearedRevision !== revision) {
@@ -192,10 +256,10 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     setAccumulatedMl(0);
   }
 
+  /** Send the accumulated pour as ONE action. Does not touch the valve. */
   const confirmPour = useCallback(async () => {
     if (!stage || sending.current) return;
     const quantized = quantizeDeliveryMl(accumulatedMl, graduationMl);
-    toggleStopcock(activeStageKey);
     setAccumulatedMl(0);
     if (quantized > 0 && trialOpen) {
       sending.current = true;
@@ -205,18 +269,20 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
         sending.current = false;
       }
     }
-  }, [stage, accumulatedMl, graduationMl, toggleStopcock, activeStageKey, trialOpen, perform]);
+  }, [stage, accumulatedMl, graduationMl, activeStageKey, trialOpen, perform]);
 
-  const handleToggleStopcock = useCallback(() => {
-    if (!canUseStopcock) return;
-    if (stopcockOpen) {
-      void confirmPour();
-    } else {
-      toggleStopcock(activeStageKey);
-    }
-  }, [canUseStopcock, stopcockOpen, confirmPour, toggleStopcock, activeStageKey]);
+  /** Turn the valve by hand. Shutting it records whatever passed. */
+  const handleValveAngle = useCallback(
+    (angleDeg: number) => {
+      if (!canUseStopcock) return;
+      const wasOpen = stopcockIsOpen(angleDeg);
+      setStopcockAngleForStage(activeStageKey, angleDeg);
+      if (!wasOpen && accumulatedMl > 0) void confirmPour();
+    },
+    [canUseStopcock, setStopcockAngleForStage, activeStageKey, accumulatedMl, confirmPour],
+  );
 
-  // Auto-stop: the burette ran dry mid-pour — confirm what accumulated.
+  // Auto-stop: the burette ran dry mid-pour — record what accumulated.
   useEffect(() => {
     if (
       pathOpen &&
@@ -233,6 +299,19 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
       void confirmPour();
     }
   }, [pathOpen, stopcockOpen, trialOpen, buretteRemainingMl, accumulatedMl, flaskInReceiving, confirmPour]);
+
+  // ---- Looking at things ----------------------------------------------------
+  /**
+   * The crosshair's answer, reported by the scene. Only a CHANGE reaches React,
+   * so walking the laboratory does not re-render the world every frame.
+   */
+  const handleLookChange = useCallback(
+    (key: PhysicalSelectionKey, dropPoint: BenchPoint) => {
+      dropPointRef.current = dropPoint;
+      setLookedAtKey(key);
+    },
+    [setLookedAtKey],
+  );
 
   // ---- Selection bridges into the existing bench selection ------------------
   const handleSelectApparatus = useCallback(
@@ -260,7 +339,7 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
         setSelectedApparatusKey(null);
       }
     },
-    [setSelectedApparatusKey],
+    [setSelectedApparatusKey, setFocus],
   );
 
   const handleSelectReagent = useCallback(
@@ -271,13 +350,62 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     [setSelectedReagentKey],
   );
 
-  const handleFlaskDrop = useCallback((point: BenchPoint) => {
-    setFlaskBenchPos(point);
-  }, []);
+  const handleFlaskDrop = useCallback(
+    (point: BenchPoint) => {
+      // Setting the flask down on the waste container discards the completed
+      // trial — the same `discard_to_waste` the panel sends, gated the same way.
+      if (stage && wastePlacementValid(point)) {
+        const availability = discardAvailability(stage, { canWrite, pending });
+        if (availability.available) {
+          setFlaskBenchPos({ ...FLASK_TILE_SLOT });
+          void perform({ type: "discard_to_waste", stageKey: stage.key });
+          return;
+        }
+      }
+      setFlaskBenchPos(point);
+    },
+    [stage, canWrite, pending, perform, setFlaskBenchPos],
+  );
+
+  const handleBeakerDrop = useCallback(
+    (point: BenchPoint) => {
+      setBeakerBenchPos(point);
+    },
+    [setBeakerBenchPos],
+  );
+
+  // ---- Setting a carried vessel down ---------------------------------------
+  // The release happens when the hand empties, wherever the student is looking:
+  // over the waste it discards, on the balance it lands on the pan, otherwise
+  // it rests on the bench. Physical handling only — every act it implies goes
+  // through the same protocol actions as the panels.
+  useEffect(() => {
+    const previous = carriedBefore.current;
+    carriedBefore.current = carried;
+    if (carried !== null || previous === null) return;
+    const point = dropPointRef.current;
+    if (previous === "flask") {
+      if (stage && wastePlacementValid(point)) {
+        const availability = discardAvailability(stage, { canWrite, pending });
+        if (availability.available) {
+          setFlaskBenchPos({ ...FLASK_TILE_SLOT });
+          void perform({ type: "discard_to_waste", stageKey: stage.key });
+          return;
+        }
+      }
+      setFlaskBenchPos(flaskReceivingValid(point) ? { ...FLASK_UNDER_BURETTE_SLOT } : point);
+      return;
+    }
+    if (previous === "beaker") {
+      // Set down on the pan, it clicks onto the pan; anywhere else it rests
+      // where the student released it.
+      setBeakerBenchPos(releasePointFor("beaker", point));
+    }
+  }, [carried, stage, canWrite, pending, perform, setFlaskBenchPos, setBeakerBenchPos]);
 
   if (!stage) {
     return (
-      <div className="rounded-md border border-dashed border-line-strong p-6 text-center text-sm text-muted">
+      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted">
         No titration stage is configured for this experiment.
       </div>
     );
@@ -296,20 +424,19 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
         : !prep.khpTransferred
           ? "dissolving"
           : "none";
-  const beakerLiquidMl =
-    !weighed
-      ? 0
-      : beakerPlus === null
-        ? prep.beakerObtained
-          ? 100
-          : 0
-        : !prep.khpDissolved
-          ? 0
-          : !prep.khpTransferred
-            ? 30
-            : prep.beakerRinses < 2
-              ? 5
-              : 0;
+  const beakerLiquidMl = !weighed
+    ? 0
+    : beakerPlus === null
+      ? prep.beakerObtained
+        ? 100
+        : 0
+      : !prep.khpDissolved
+        ? 0
+        : !prep.khpTransferred
+          ? 30
+          : prep.beakerRinses < 2
+            ? 5
+            : 0;
 
   const balanceDisplay =
     beakerPlus !== null
@@ -385,17 +512,29 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     },
   ].slice(0, 5);
 
-  const discardedTotal = model.state.publicState
-    ? stage.concordance.discardedTrials.length + prep.wasteDiscards
-    : 0;
+  const discardedTotal = stage.concordance.discardedTrials.length + prep.wasteDiscards;
+  const bubbleCleared = prep.airBubbleCleared;
+  const airBubble = buretteSetup && !bubbleCleared;
 
+  // The receiving spot lights when the flask is on it. While the flask is in
+  // hand and Rapier is running, the sensor has to confirm the bodies really
+  // overlap too: the green light is the student's cue that they may release,
+  // so it must mean "the meshes are there", not just "the numbers say so".
+  const physicsAgrees = !interactive || carried === null || serverPlaced || physicsInside;
   const zoneState: Lab3DSceneProps["zoneState"] =
-    flaskInReceiving && !serverPlaced ? "valid" : "idle";
+    flaskInReceiving && !serverPlaced && physicsAgrees ? "valid" : "idle";
 
   const sceneProps: Lab3DSceneProps = {
     burette: { readingMl, capacityMl, graduationMl },
-    stopcockOpen,
+    stopcockAngleDeg: stopcockAngle,
     stopcockInteractive: canUseStopcock,
+    valveDragging,
+    onValveAngle: handleValveAngle,
+    onValveDragChange: setValveDragging,
+    airBubble,
+    rinseFlash,
+    indicatorBurst,
+    wastePulse,
     flowing: pathOpen && accumulatedMl >= 0,
     dropwise: flowMode === "DROPWISE",
     previewDeliveredMl: accumulatedMl,
@@ -410,152 +549,35 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     balance: { displayText: balanceDisplay, hasBeaker: weighed },
     cylinder,
     beaker: { liquidMl: beakerLiquidMl, khpState },
+    beakerPos: beakerBenchPos ?? { ...FIXED_SLOTS.beaker },
     wasteDiscarded: discardedTotal,
     reagents,
     selection: selection3D ?? mapBenchSelection(selectedApparatusKey),
+    lookedAt: lookedAtKey,
     focus,
     readingMode,
-    resetSignal,
     dragEnabled: interactive,
     stirring,
+    carriedKind: carried,
+    carriedYawRadians: carriedRotation.yawRadians,
     zoneState,
     physicsEnabled: interactive,
+    moveEnabled: walkMode,
+    onLookChange: handleLookChange,
+    onPointerLockChange: setPointerLocked,
     onPhysicsZone: setPhysicsInside,
     onSelectApparatus: handleSelectApparatus,
     onSelectReagent: handleSelectReagent,
-    onToggleStopcock: handleToggleStopcock,
     onFlaskDrop: handleFlaskDrop,
+    onBeakerDrop: handleBeakerDrop,
+    guideKey: guideTargetForNextAction(stage.nextAction?.kind),
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      {/* 3D toolbar: camera + flow mode + reading mode. Chemistry actions stay
-          in the existing panels, so every 3D gesture has a panel equivalent. */}
-      <div className="flex flex-wrap items-center gap-2 text-xs" role="toolbar" aria-label="3D laboratory controls">
-        <span className="font-semibold">Camera:</span>
-        {(
-          [
-            ["burette", "Focus burette"],
-            ["flask", "Focus flask"],
-            ["balance", "Focus balance"],
-            ["cylinder", "Focus cylinder"],
-          ] as Array<[ApparatusFocusKey, string]>
-        ).map(([key, label]) => (
-          <Button
-            key={key}
-            size="sm"
-            variant={focus === key ? "primary" : "secondary"}
-            aria-pressed={focus === key}
-            onClick={() => {
-              setFocus(key);
-              setReadingMode(false);
-            }}
-          >
-            {label}
-          </Button>
-        ))}
-        <Button
-          size="sm"
-          variant={readingMode ? "primary" : "secondary"}
-          aria-pressed={readingMode}
-          onClick={() => {
-            setFocus("burette");
-            setReadingMode((mode) => !mode);
-          }}
-        >
-          Reading mode
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => {
-            setFocus(null);
-            setReadingMode(false);
-            setResetSignal((n) => n + 1);
-          }}
-        >
-          Reset view
-        </Button>
-        <span className="ms-2 font-semibold">Flow:</span>
-        {(
-          Object.keys(FLOW_MODES) as Array<FlowMode>
-        ).map((mode) => (
-          <Button
-            key={mode}
-            size="sm"
-            variant={flowMode === mode ? "primary" : "secondary"}
-            aria-pressed={flowMode === mode}
-            title={FLOW_MODES[mode].label}
-            onClick={() => setFlowMode(mode)}
-          >
-            {mode.charAt(0) + mode.slice(1).toLowerCase()}
-          </Button>
-        ))}
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={!interactive}
-          title="Accessible alternative to dragging: place the flask under the burette"
-          onClick={() => setFlaskBenchPos({ ...FLASK_UNDER_BURETTE_SLOT })}
-        >
-          Place flask under burette
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={!interactive}
-          title="Accessible alternative to dragging: return the flask to the tile"
-          onClick={() => setFlaskBenchPos({ ...FLASK_TILE_SLOT })}
-        >
-          Flask to tile
-        </Button>
-        <Button
-          size="sm"
-          variant={stirring ? "primary" : "secondary"}
-          aria-pressed={stirring}
-          disabled={!interactive}
-          title="Visual stirring with the glass rod (dissolution itself is recorded in the preparation panel)"
-          onClick={() => setStirring((value) => !value)}
-        >
-          {stirring ? "Stop stirring" : "Stir with rod"}
-        </Button>
-      </div>
-
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-line bg-surface">
-        <div className="h-full max-h-[72vh] min-h-[420px] w-full">
-          <SceneErrorBoundary>
-            <Lab3DCanvas {...sceneProps} />
-          </SceneErrorBoundary>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <Badge tone="neutral">Flask: {stage.flask.label}</Badge>
-        <Badge tone="neutral">Stopcock: {stopcockOpen ? "open" : "closed"}</Badge>
-        <Badge tone="neutral">
-          Burette: {readingMl === null ? "not filled" : `${readingMl.toFixed(2)} mL`}
-        </Badge>
-        {stopcockOpen && trialOpen ? (
-          <span className="text-muted" role="status">
-            Pouring ({FLOW_MODES[flowMode].label.toLowerCase()}):{" "}
-            {quantizeDeliveryMl(accumulatedMl, graduationMl).toFixed(2)} mL unconfirmed — close
-            the stopcock to record it.
-          </span>
-        ) : null}
-        {!flaskInReceiving && trialOpen ? (
-          <span className="text-warning">The flask is not under the burette — drag it into the highlighted zone.</span>
-        ) : null}
-        {flaskInReceiving && physicsInside ? (
-          <span className="text-muted">Bench contact confirmed.</span>
-        ) : null}
-        {stopcockRule?.reason && !canUseStopcock ? (
-          <span className="text-warning">{stopcockRule.reason}</span>
-        ) : null}
-        {swirl ? <span className="text-muted">Swirling.</span> : null}
-        <span className="ms-auto text-muted">
-          Drag to orbit · scroll to zoom · right-drag to pan · click apparatus to inspect.
-        </span>
-      </div>
+    <div className="relative h-full min-h-0 w-full overflow-hidden bg-surface">
+      <SceneErrorBoundary>
+        <Lab3DCanvas {...sceneProps} />
+      </SceneErrorBoundary>
     </div>
   );
 }

@@ -4,3 +4,4 @@ export * from "./simulationClock";
 export * from "./spatial";
 export * from "./apparatus-state";
 export * from "./fluidTransfer";
+export * from "./movement";

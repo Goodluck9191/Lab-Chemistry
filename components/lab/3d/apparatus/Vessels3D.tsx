@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useRef, useState } from "react";
+import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import * as THREE from "three";
 import { straightWallLiquidHeight } from "../simulation/volume-mapping";
+import { clampToBench, snapBeakerOnDrop, type BenchPoint } from "../simulation/spatial";
 import { Selectable3DObject } from "../interactions";
 
 /**
@@ -12,6 +13,10 @@ import { Selectable3DObject } from "../interactions";
  * derivations passed as props — none of them computes chemistry, and none
  * receives hidden values.
  */
+
+/** How far in front of the eye a carried vessel rides, and how far below it. */
+const CARRY_FORWARD_UNITS = 0.85;
+const CARRY_DROP_UNITS = 0.42;
 
 // ---------------------------------------------------------------------------
 // 250 mL beaker with KHP solid → dissolving → dissolved states
@@ -23,6 +28,10 @@ export function Beaker3D({
   khpState,
   selected,
   onSelect,
+  dragEnabled = false,
+  heldInHand = false,
+  heldYawRadians = 0,
+  onDrop,
 }: {
   position: [number, number, number];
   liquidMl: number;
@@ -30,15 +39,76 @@ export function Beaker3D({
   khpState: "solid" | "dissolving" | "dissolved" | "none";
   selected: boolean;
   onSelect: () => void;
+  /** Slide it across the bench under the pointer (physical only). */
+  dragEnabled?: boolean;
+  /** Carried in the student's hand: it rides in front of the eye instead. */
+  heldInHand?: boolean;
+  /** How the carried beaker is turned in the hand, radians. */
+  heldYawRadians?: number;
+  onDrop?: (point: BenchPoint) => void;
 }) {
   const liquidH = straightWallLiquidHeight(liquidMl, {
     bottomY: 0,
     heightUnits: 0.85,
     capacityMl: 250,
   });
+  const [dragPos, setDragPos] = useState<BenchPoint | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const offset = useRef({ x: 0, z: 0 });
+  const root = useRef<THREE.Group>(null);
+  const camera = useThree((state) => state.camera);
+  const yaw = useRef(0);
+  const shownX = dragPos?.x ?? position[0];
+  const shownZ = dragPos?.z ?? position[2];
+
+  useFrame((_, delta) => {
+    if (!root.current) return;
+    if (heldInHand) {
+      const forward = camera.getWorldDirection(new THREE.Vector3());
+      forward.y = 0;
+      forward.normalize();
+      root.current.position.set(
+        camera.position.x + forward.x * CARRY_FORWARD_UNITS,
+        camera.position.y - CARRY_DROP_UNITS,
+        camera.position.z + forward.z * CARRY_FORWARD_UNITS,
+      );
+    } else {
+      root.current.position.set(shownX, 0, shownZ);
+    }
+    const targetYaw = heldInHand ? heldYawRadians : 0;
+    yaw.current += (targetYaw - yaw.current) * Math.min(1, delta * 10);
+    root.current.rotation.y = yaw.current;
+  });
+
+  const beginDrag = (event: ThreeEvent<PointerEvent>) => {
+    if (!dragEnabled || heldInHand) return;
+    event.stopPropagation();
+    offset.current = { x: shownX - event.point.x, z: shownZ - event.point.z };
+    setDragging(true);
+    document.body.style.cursor = "grabbing";
+  };
+  const moveDrag = (event: ThreeEvent<PointerEvent>) => {
+    if (!dragging) return;
+    event.stopPropagation();
+    setDragPos(clampToBench({ x: event.point.x + offset.current.x, z: event.point.z + offset.current.z }));
+  };
+  const endDrag = (event: ThreeEvent<PointerEvent>) => {
+    if (!dragging) return;
+    event.stopPropagation();
+    setDragging(false);
+    document.body.style.cursor = "auto";
+    const dropped = clampToBench({
+      x: event.point.x + offset.current.x,
+      z: event.point.z + offset.current.z,
+    });
+    setDragPos(null);
+    onDrop?.(snapBeakerOnDrop(dropped));
+  };
+
   return (
-    <group position={position}>
+    <group ref={root} position={[shownX, 0, shownZ]}>
       <Selectable3DObject selected={selected} onSelect={onSelect} name="Beaker, 250 mL">
+        <group onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag}>
         <mesh position={[0, 0.45, 0]} castShadow name="BeakerWall">
           <cylinderGeometry args={[0.34, 0.32, 0.9, 24, 1, true]} />
           <meshPhysicalMaterial
@@ -80,6 +150,71 @@ export function Beaker3D({
             ))}
           </group>
         ) : null}
+        </group>
+      </Selectable3DObject>
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Watch glass (covers the beaker the procedure says to cover)
+// ---------------------------------------------------------------------------
+
+export function WatchGlass3D({
+  position,
+  covering,
+  selected,
+  onSelect,
+}: {
+  position: [number, number, number];
+  /** Raised onto the beaker when true; resting on the bench otherwise. */
+  covering: boolean;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const lift = covering ? 0.92 : 0.02;
+  return (
+    <group position={position}>
+      <Selectable3DObject selected={selected} onSelect={onSelect} name="Watch glass">
+        <mesh position={[0, lift, 0]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+          <sphereGeometry args={[0.24, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2.6]} />
+          <meshPhysicalMaterial
+            color="#e2e8f0"
+            transparent
+            opacity={0.3}
+            roughness={0.05}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      </Selectable3DObject>
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rubber stopper (seals the flask the manual says to stopper and swirl)
+// ---------------------------------------------------------------------------
+
+export function RubberStopper3D({
+  position,
+  selected,
+  onSelect,
+}: {
+  position: [number, number, number];
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <group position={position}>
+      <Selectable3DObject selected={selected} onSelect={onSelect} name="Rubber stopper">
+        <mesh position={[0, 0.06, 0]} castShadow>
+          <cylinderGeometry args={[0.075, 0.095, 0.14, 16]} />
+          <meshStandardMaterial color="#3f3f46" roughness={0.85} />
+        </mesh>
+        <mesh position={[0, 0.14, 0]}>
+          <cylinderGeometry args={[0.11, 0.11, 0.03, 16]} />
+          <meshStandardMaterial color="#52525b" roughness={0.8} />
+        </mesh>
       </Selectable3DObject>
     </group>
   );

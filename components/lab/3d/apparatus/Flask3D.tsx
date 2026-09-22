@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useFrame, type ThreeEvent } from "@react-three/fiber";
+import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import * as THREE from "three";
 import {
   clampToBench,
@@ -14,21 +14,26 @@ import { FlaskLiquid } from "../liquids";
 import { Selectable3DObject } from "../interactions";
 
 /**
- * The 3D Erlenmeyer flask: cone body, neck, liquid, swirl and drag.
+ * The 3D Erlenmeyer flask: cone body, neck, liquid, swirl, drag and carry.
  *
  * - Liquid level and colour come from public state (volume + observed colour).
- * - Drag: press and move on the bench plane; release inside the receiving zone
- *   snaps under the burette tip, otherwise the flask stays where left. The
- *   AUTHORITATIVE placement (`place_flask`) still runs through the action
- *   panel — dragging is physical positioning, validated by `spatial.ts`.
- * - Swirl: while `swirling` the whole flask rocks gently and the liquid
- *   sloshes (deterministic tilt, no fluid dynamics).
+ * - Two ways to move it. DRAGGING slides it across the bench under the pointer.
+ *   CARRYING (`heldInHand`) lifts it off the bench into the student's view and
+ *   keeps it in front of the camera while they walk, turn it with R, and set it
+ *   down with Space. Both are physical positioning only; the authoritative
+ *   `place_flask` still runs through the action protocol.
+ * - Swirl: while `swirling` the whole flask rocks gently and the liquid sloshes
+ *   (deterministic tilt, no fluid dynamics).
  */
 
 export const FLASK_CONE_HEIGHT = 0.85;
 export const FLASK_BASE_RADIUS = 0.42;
 export const FLASK_NECK_RADIUS = 0.14;
 const FLASK_CONE_CAPACITY_ML = 250;
+
+/** How far in front of the eye a carried vessel rides, and how far below it. */
+const CARRY_FORWARD_UNITS = 0.85;
+const CARRY_DROP_UNITS = 0.42;
 
 export function Flask3D({
   flaskPos,
@@ -39,6 +44,8 @@ export function Flask3D({
   hasContents,
   selected,
   dragEnabled,
+  heldInHand = false,
+  heldYawRadians = 0,
   onSelect,
   onDrop,
 }: {
@@ -52,6 +59,10 @@ export function Flask3D({
   hasContents: boolean;
   selected: boolean;
   dragEnabled: boolean;
+  /** True while the flask is physically in the student's hand. */
+  heldInHand?: boolean;
+  /** How the carried flask is turned in the hand, radians. */
+  heldYawRadians?: number;
   onSelect: () => void;
   onDrop: (point: BenchPoint) => void;
 }) {
@@ -59,6 +70,9 @@ export function Flask3D({
   const [dragging, setDragging] = useState(false);
   const offset = useRef({ x: 0, z: 0 });
   const rock = useRef<THREE.Group>(null);
+  const root = useRef<THREE.Group>(null);
+  const camera = useThree((state) => state.camera);
+  const yaw = useRef(0);
 
   const shown = dragPos ?? flaskPos;
   const liquidHeight = flaskLiquidHeight(volumeMl, {
@@ -67,13 +81,32 @@ export function Flask3D({
   });
 
   useFrame((_, delta) => {
+    // In the hand: ride in front of the eye, at a believable distance, turned
+    // by the student. On the bench: sit exactly where the bench state says.
+    if (root.current) {
+      if (heldInHand) {
+        const forward = camera.getWorldDirection(new THREE.Vector3());
+        forward.y = 0;
+        forward.normalize();
+        root.current.position.set(
+          camera.position.x + forward.x * CARRY_FORWARD_UNITS,
+          camera.position.y - CARRY_DROP_UNITS,
+          camera.position.z + forward.z * CARRY_FORWARD_UNITS,
+        );
+      } else {
+        root.current.position.set(shown.x, 0, shown.z);
+      }
+      const targetYaw = heldInHand ? heldYawRadians : 0;
+      yaw.current += (targetYaw - yaw.current) * Math.min(1, delta * 10);
+      root.current.rotation.y = yaw.current;
+    }
     if (!rock.current) return;
     const target = swirling && !dragging ? Math.sin(swirlPhase * 6) * 0.08 : 0;
     rock.current.rotation.z += (target - rock.current.rotation.z) * Math.min(1, delta * 8);
   });
 
   const beginDrag = (event: ThreeEvent<PointerEvent>) => {
-    if (!dragEnabled) return;
+    if (!dragEnabled || heldInHand) return;
     event.stopPropagation();
     offset.current = { x: shown.x - event.point.x, z: shown.z - event.point.z };
     setDragging(true);
@@ -100,11 +133,11 @@ export function Flask3D({
   const receiving = flaskReceivingValid(shown);
 
   return (
-    <group position={[shown.x, 0, shown.z]}>
+    <group ref={root} position={[shown.x, 0, shown.z]}>
       <Selectable3DObject
         selected={selected}
         onSelect={onSelect}
-        name={`Conical flask${hasContents ? `, contents visible` : ", empty"}`}
+        name={`Conical flask${hasContents ? ", contents visible" : ", empty"}`}
       >
         <group
           ref={rock}

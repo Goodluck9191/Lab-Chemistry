@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { render } from "@testing-library/react";
 import { LabStateProvider } from "@/components/lab/lab-state-provider";
+import { LabWorkspace } from "@/components/lab/lab-workspace";
 import type { LabStateView } from "@/application/attempts/lab-state";
 import type {
   LabActionDependencies,
@@ -34,6 +35,28 @@ export function renderLabPanels({
       {panels}
     </LabStateProvider>,
   );
+}
+
+/**
+ * Mount the whole immersive laboratory.
+ *
+ * `LabWorkspace` opens its OWN state provider, so the injected sender must be
+ * handed to the workspace rather than wrapped around it — a nested provider
+ * would leave the real server actions in place and make every interaction in a
+ * test appear to do nothing.
+ */
+export function renderLabWorld({
+  state,
+  send,
+  loadState,
+}: {
+  state: LabStateView;
+  send?: (input: unknown) => Promise<LabActionOutcome>;
+  loadState?: (attemptId: string) => Promise<
+    { status: "ok"; state: LabStateView } | { status: "error"; code: string; message: string }
+  >;
+}) {
+  return render(<LabWorkspace initialState={state} send={send} loadState={loadState} />);
 }
 
 /** A successful action outcome, as the transport would return it. */

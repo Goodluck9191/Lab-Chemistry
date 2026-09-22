@@ -4,11 +4,10 @@ import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { LabActionOutcome } from "@/application/attempts/lab-transport";
 import { SIMULATION_PROTOCOL_VERSION } from "@/domain/simulation/titration/protocol";
-import { LabBench } from "@/components/lab/lab-bench";
-import { TitrationControls } from "@/components/lab/titration-controls";
 import { PreparationControls } from "@/components/lab/preparation-controls";
+import { TitrationControls } from "@/components/lab/titration-controls";
 import { labStateViewFor } from "../helpers/lab-fixture";
-import { okOutcome, renderLabPanels } from "../helpers/lab-render";
+import { okOutcome, renderLabPanels, renderLabWorld } from "../helpers/lab-render";
 import {
   addIndicator,
   addTitrant,
@@ -41,17 +40,11 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-afterEach(cleanup);
+// WebGL never initialises in jsdom, so the Canvas lands on its error boundary
+// while the HUD, the contextual prompt and the drawers render for real.
+vi.setConfig({ testTimeout: 30_000 });
 
-/**
- * SVG `<title>` text, which is what names each piece of apparatus for a screen
- * reader. Queried directly rather than through `getByTitle`, whose SVG handling
- * differs by version — the assertion here is about the accessible name, which is
- * the part that matters.
- */
-function svgTitles(): string[] {
-  return Array.from(document.querySelectorAll("title")).map((node) => node.textContent ?? "");
-}
+afterEach(cleanup);
 
 /** A session sitting at the start of trial 1, ready to receive titrant. */
 function readyToTitrate() {
@@ -63,90 +56,72 @@ function readyToTitrate() {
   return session;
 }
 
-describe("laboratory bench (jsdom)", () => {
-  it("renders the bench apparatus with accessible names", () => {
+async function openWorld(
+  state: ReturnType<typeof labStateViewFor>,
+  send?: (input: unknown) => Promise<LabActionOutcome>,
+) {
+  const user = userEvent.setup();
+  renderLabWorld({ state, send });
+  return user;
+}
+
+async function openPrompt(user: ReturnType<typeof userEvent.setup>) {
+  await user.keyboard("{e}");
+  return screen.getByRole("dialog", { name: /contextual interaction prompt/i });
+}
+
+/**
+ * The immersive laboratory.
+ *
+ * This suite used to drive the 2D SVG bench, which no longer exists. The
+ * assertions that mattered — accessible names, the protocol payloads, honest
+ * colour reporting, frozen attempts, hidden-value protection — are made here
+ * against the world's real text surfaces: the HUD, the contextual prompt and
+ * the drawers that hold the panels.
+ */
+describe("the immersive laboratory (jsdom)", () => {
+  it("opens the world with a minimal HUD, and no 2D laboratory anywhere", async () => {
     const session = readyToTitrate();
-    renderLabPanels({
-      state: labStateViewFor(session),
-      panels: (
-        <>
-          <LabBench initialState={labStateViewFor(session)} />
-          <TitrationControls />
-        </>
-      ),
-    });
-
-    expect(screen.getByRole("group", { name: /laboratory bench/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /burette stopcock: closed/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /conical flask/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /reagent bottle: sodium hydroxide/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /indicator bottle: phenolphthalein/i })).toBeTruthy();
-
-    const titles = svgTitles().join("\n");
-    for (const apparatus of [
-      /conical flask, 250 mL/i,
-      /burette stand and clamp/i,
-      /analytical balance/i,
-      /waste container/i,
-      /white tile/i,
-      /burette, 50 mL, graduated to 0.1 mL/i,
-      /volumetric flask/i,
-      /beaker/i,
-    ]) {
-      expect(titles).toMatch(apparatus);
-    }
-    // Stage A weighs its sample, so no aliquot ware is drawn at all.
-    expect(titles).not.toMatch(/pipette|measuring cylinder/i);
-  });
-
-  it("draws the ware the procedure names for the measured aliquot", () => {
-    // Stage A is complete, so stage B is the active stage on the bench.
-    const session = concordantStageASession("bench-vessel-seed");
-    setupApparatus(session, STAGE_B, "naoh", 0);
     const state = labStateViewFor(session);
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <TitrationControls />
-        </>
-      ),
-    });
+    const user = await openWorld(state);
 
-    // The manual measures the HCl aliquot in a cylinder; no pipette is offered.
-    expect(screen.getByRole("button", { name: /measuring cylinder, 25 mL/i })).toBeTruthy();
-    const titles = svgTitles().join("\n");
-    expect(titles).toMatch(/measuring cylinder, 25 mL/i);
-    expect(titles).not.toMatch(/pipette/i);
+    // The world and its four corners.
+    expect(screen.getByLabelText(/immersive 3d laboratory/i)).toBeTruthy();
+    expect(screen.getByText(/experiment 2/i)).toBeTruthy();
+    expect(screen.getByRole("status", { name: /current objective/i })).toBeTruthy();
+    expect(screen.getByRole("status", { name: /trial progress/i })).toBeTruthy();
+
+    // No view tabs, no permanent toolbar, no permanent sidebars.
+    expect(screen.queryByRole("tab", { name: /2d bench/i })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /3d laboratory/i })).toBeNull();
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(document.querySelectorAll("svg [role='button']").length).toBe(0);
+
+    // The contextual prompt is where the apparatus is addressed from, and it
+    // names each piece the way a student would.
+    const prompt = await openPrompt(user);
+    expect(prompt.textContent).toMatch(/burette/i);
+    expect(prompt.textContent).toMatch(/flask/i);
+    expect(prompt.textContent).toMatch(/balance/i);
   });
 
-  it("reflects the persisted flask colour in the drawing and in text", () => {
+  it("reflects the persisted flask colour in words as well as in the world", async () => {
     const session = readyToTitrate();
     addTitrant(session, STAGE_A, hiddenTruth(session, STAGE_A).observableMl);
     const state = labStateViewFor(session);
+    const user = await openWorld(state);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <TitrationControls />
-        </>
-      ),
-    });
+    // Text, not colour alone: the HUD names the flask's state, so a student who
+    // cannot read the tint of the liquid still knows where they are.
+    expect(screen.getByText(/flask: faint pink/i)).toBeTruthy();
 
-    // Text, not colour alone: the flask label shows the colour name.
-    // The description is in the flask's accessible title.
-    expect(
-      screen.getAllByText(/a faint pink that persists marks the endpoint/i).length,
-    ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByRole("button", { name: /contents: faint pink/i })).toBeTruthy();
-    // The drawing itself carries the endpoint layer.
-    expect(document.querySelector(".lab-flask-colour")).toBeTruthy();
+    const prompt = await openPrompt(user);
+    await user.click(screen.getByRole("button", { name: "Flask" }));
+    expect(prompt.textContent).toMatch(/erlenmeyer flask/i);
   });
 
-  it("opens the stopcock from the bench and delivers titrant through the protocol", async () => {
+  it("opens the stopcock and delivers titrant through the protocol", async () => {
     const user = userEvent.setup();
     const session = readyToTitrate();
     const state = labStateViewFor(session);
@@ -156,24 +131,18 @@ describe("laboratory bench (jsdom)", () => {
       return okOutcome(publicStateOf(next), 5);
     });
 
-    renderLabPanels({
-      state,
-      send,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <TitrationControls />
-        </>
-      ),
-    });
+    renderLabWorld({ state, send });
+    await openPrompt(user);
 
-    const increments = screen.getAllByRole("button", { name: /1\.00 mL/ });
-    expect(increments[0]).toHaveProperty("disabled", true);
+    // The valve turns on the burette's own panel, and the HUD reports where it
+    // stopped.
+    await user.click(screen.getByRole("button", { name: "Burette" }));
+    await user.click(screen.getByRole("button", { name: /open the stopcock/i }));
+    expect(screen.getAllByText(/stopcock: cracked open/i).length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole("button", { name: /burette stopcock: closed/i }));
-    expect(screen.getByRole("button", { name: /burette stopcock: open/i })).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /1\.00 mL/ }));
+    // With the path open, the panel's delivery goes through the same protocol.
+    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getAllByRole("button", { name: /1\.00 mL/ })[0]);
 
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     expect(send).toHaveBeenCalledWith({
@@ -184,24 +153,22 @@ describe("laboratory bench (jsdom)", () => {
     });
   });
 
-  it("swirls the flask when the flask itself is activated", async () => {
-    const user = userEvent.setup();
+  it("swirls the flask from its own context", async () => {
     const session = readyToTitrate();
     const state = labStateViewFor(session);
+    const user = await openWorld(state);
+    await openPrompt(user);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <TitrationControls />
-        </>
-      ),
-    });
+    await user.click(screen.getByRole("button", { name: "Flask" }));
 
-    expect(screen.getByText("Flask at rest.")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /conical flask\. contents: colourless/i }));
-    expect(screen.getByText("Flask swirling.")).toBeTruthy();
+    const swirl = screen.getByRole("button", { name: /swirl the flask/i });
+    expect(swirl.getAttribute("aria-pressed")).toBe("false");
+    await user.click(swirl);
+
+    expect(screen.getByRole("button", { name: /stop swirling/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /stop swirling/i }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
   });
 
   it("disables the controls while an action is in flight", async () => {
@@ -216,16 +183,7 @@ describe("laboratory bench (jsdom)", () => {
         }),
     );
 
-    renderLabPanels({
-      state,
-      send,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <TitrationControls />
-        </>
-      ),
-    });
+    renderLabPanels({ state, send, panels: <TitrationControls /> });
 
     await user.click(screen.getByRole("button", { name: /open stopcock/i }));
     await user.click(screen.getAllByRole("button", { name: /0\.10 mL/ })[0]);
@@ -248,11 +206,7 @@ describe("laboratory bench (jsdom)", () => {
       okOutcome(publicStateOf(session), 5),
     );
 
-    renderLabPanels({
-      state,
-      send,
-      panels: <PreparationControls initialState={state} />,
-    });
+    renderLabPanels({ state, send, panels: <PreparationControls initialState={state} /> });
 
     await user.type(screen.getByLabelText(/initial burette reading/i), "0.00");
     await user.click(screen.getByRole("button", { name: /fill burette/i }));
@@ -275,21 +229,16 @@ describe("laboratory bench (jsdom)", () => {
     );
   });
 
-  it("never renders a hidden value from the session", () => {
+  it("never renders a hidden value anywhere in the laboratory", async () => {
     const session = readyToTitrate();
     const truth = hiddenTruth(session, STAGE_A);
     const state = labStateViewFor(session);
+    const user = await openWorld(state);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <TitrationControls />
-          <PreparationControls initialState={state} />
-        </>
-      ),
-    });
+    await openPrompt(user);
+    await user.click(screen.getByRole("button", { name: "Flask" }));
+    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getByRole("button", { name: /^results$/i }));
 
     const text = document.body.textContent ?? "";
     expect(text).not.toContain(DEFAULT_SEED);
@@ -297,8 +246,6 @@ describe("laboratory bench (jsdom)", () => {
     expect(text).not.toContain(String(truth.analyteMoles));
     expect(text).not.toContain(truth.equivalenceMl.toFixed(4));
     expect(text).not.toContain("observable");
-    // The numbers that ARE shown are the student's own readings.
-    expect(text).toContain("0.00 mL");
   });
 
   it("records the final reading and closes the trial", async () => {
@@ -334,39 +281,57 @@ describe("laboratory bench (jsdom)", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("shows no controls at all on a frozen attempt", () => {
+  it("shows no controls at all on a frozen attempt", async () => {
     const session = readyToTitrate();
     const state = labStateViewFor(session, { canWrite: false });
+    const user = await openWorld(state);
+    await openPrompt(user);
 
-    renderLabPanels({
-      state,
-      panels: (
-        <>
-          <LabBench initialState={state} />
-          <TitrationControls />
-          <PreparationControls initialState={state} />
-        </>
-      ),
-    });
+    // Every bench control names the reason it is inert, on the control itself.
+    await user.click(screen.getByRole("button", { name: "Burette" }));
+    expect(screen.getAllByText(/read-only/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /open the stopcock/i })).toHaveProperty(
+      "disabled",
+      true,
+    );
 
-    for (const button of screen
-      .getAllByRole("button")
-      .filter((element) => element.tagName === "BUTTON")) {
+    await user.click(screen.getByRole("button", { name: "Flask" }));
+    expect(screen.getByRole("button", { name: /pick the flask up/i })).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    // And the panel's own actions are inert too.
+    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    for (const button of screen.getAllByRole("button", { name: /fill burette|complete trial/i })) {
       expect(button).toHaveProperty("disabled", true);
     }
-    // SVG click targets are inert too: no apparatus can be activated at all.
-    expect(document.querySelectorAll('svg [role="button"]').length).toBe(0);
-    expect(screen.getByText(/read-only attempt/i)).toBeTruthy();
   });
 
-  it("keeps the burette reading visible after a reload of the same state", () => {
+  it("keeps the burette reading visible after a reload of the same state", async () => {
     const session = readyToTitrate();
     addTitrant(session, STAGE_A, 2);
     readBurette(session, STAGE_A, 2);
     const state = labStateViewFor(session);
 
-    renderLabPanels({ state, panels: <LabBench initialState={state} /> });
-    expect(screen.getByText("Burette: 2.00 mL")).toBeTruthy();
-    expect(svgTitles().join("\n")).toMatch(/meniscus near 2\.00 mL/i);
+    await openWorld(state);
+
+    // The stored meniscus is on screen, in the student's own units.
+    expect(screen.getByText(/burette: 2\.00 ml/i)).toBeTruthy();
+  });
+
+  it("offers the ware the procedure names, and no pipette, on the aliquot stage", async () => {
+    // Stage A is complete, so Stage B is the active stage in the laboratory.
+    const session = concordantStageASession("world-vessel-seed");
+    setupApparatus(session, STAGE_B, "naoh", 0);
+    const state = labStateViewFor(session);
+    const user = await openWorld(state);
+
+    const prompt = await openPrompt(user);
+    await user.click(screen.getByRole("button", { name: "Cylinder" }));
+
+    // The manual measures the HCl aliquot in a cylinder.
+    expect(prompt.textContent).toMatch(/measuring cylinder/i);
+    expect(document.body.textContent ?? "").not.toMatch(/pipette/i);
   });
 });
