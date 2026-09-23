@@ -12,6 +12,7 @@ import {
 import { flaskColourHex, flaskColourOpacity, flaskLiquidHeight } from "../simulation/volume-mapping";
 import { FlaskLiquid } from "../liquids";
 import { Selectable3DObject } from "../interactions";
+import { GLASS_THICK_OPACITY, GlassMaterial } from "./glass";
 
 /**
  * The 3D Erlenmeyer flask: cone body, neck, liquid, swirl, drag and carry.
@@ -150,29 +151,17 @@ export function Flask3D({
             <cylinderGeometry
               args={[FLASK_NECK_RADIUS, FLASK_BASE_RADIUS, FLASK_CONE_HEIGHT, 28, 1, true]}
             />
-            <meshPhysicalMaterial
-              color="#e2e8f0"
-              transparent
-              opacity={0.3}
-              roughness={0.05}
-              side={THREE.DoubleSide}
-            />
+            <GlassMaterial />
           </mesh>
           {/* Base */}
           <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]}>
             <circleGeometry args={[FLASK_BASE_RADIUS, 28]} />
-            <meshPhysicalMaterial color="#e2e8f0" transparent opacity={0.4} roughness={0.1} />
+            <GlassMaterial opacity={GLASS_THICK_OPACITY} />
           </mesh>
           {/* Neck */}
           <mesh position={[0, FLASK_CONE_HEIGHT + 0.18, 0]} name="FlaskNeck">
             <cylinderGeometry args={[FLASK_NECK_RADIUS, FLASK_NECK_RADIUS, 0.4, 20, 1, true]} />
-            <meshPhysicalMaterial
-              color="#e2e8f0"
-              transparent
-              opacity={0.3}
-              roughness={0.05}
-              side={THREE.DoubleSide}
-            />
+            <GlassMaterial />
           </mesh>
           {/* Rim */}
           <mesh position={[0, FLASK_CONE_HEIGHT + 0.38, 0]}>

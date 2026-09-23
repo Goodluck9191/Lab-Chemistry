@@ -409,7 +409,10 @@ export function Lab3DSceneContent(props: Lab3DSceneProps) {
 export function Lab3DCanvas(props: Lab3DSceneProps) {
   return (
     <Canvas
-      shadows
+      // Shadow type is named rather than left as `shadows`: the boolean form
+      // asks three for PCFSoftShadowMap, which three r186 removed, so it warns
+      // on every scene and silently falls back to this anyway.
+      shadows="percentage"
       dpr={[1, 2]}
       camera={{ position: [0.4, 1.62, 4.4], fov: 60 }}
       aria-label="3D virtual chemistry laboratory"
