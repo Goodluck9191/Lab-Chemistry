@@ -7,6 +7,7 @@ import * as THREE from "three";
 import { straightWallLiquidHeight } from "../simulation/volume-mapping";
 import { clampToBench, snapBeakerOnDrop, type BenchPoint } from "../simulation/spatial";
 import { Selectable3DObject } from "../interactions";
+import { GLASS_THICK_OPACITY, GlassMaterial } from "./glass";
 
 /**
  * Supporting vessels and instruments. Every piece renders from public-state
@@ -111,17 +112,11 @@ export function Beaker3D({
         <group onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag}>
         <mesh position={[0, 0.45, 0]} castShadow name="BeakerWall">
           <cylinderGeometry args={[0.34, 0.32, 0.9, 24, 1, true]} />
-          <meshPhysicalMaterial
-            color="#e2e8f0"
-            transparent
-            opacity={0.3}
-            roughness={0.05}
-            side={THREE.DoubleSide}
-          />
+          <GlassMaterial />
         </mesh>
         <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <circleGeometry args={[0.32, 24]} />
-          <meshPhysicalMaterial color="#e2e8f0" transparent opacity={0.45} roughness={0.1} />
+          <GlassMaterial opacity={GLASS_THICK_OPACITY} />
         </mesh>
         {liquidH > 0.001 ? (
           <mesh position={[0, liquidH / 2 + 0.02, 0]}>
@@ -178,13 +173,7 @@ export function WatchGlass3D({
       <Selectable3DObject selected={selected} onSelect={onSelect} name="Watch glass">
         <mesh position={[0, lift, 0]} rotation={[Math.PI / 2, 0, 0]} castShadow>
           <sphereGeometry args={[0.24, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2.6]} />
-          <meshPhysicalMaterial
-            color="#e2e8f0"
-            transparent
-            opacity={0.3}
-            roughness={0.05}
-            side={THREE.DoubleSide}
-          />
+          <GlassMaterial opacity={GLASS_THICK_OPACITY} />
         </mesh>
       </Selectable3DObject>
     </group>
@@ -248,7 +237,7 @@ export function Balance3D({
         {/* Draft-shield glass */}
         <mesh position={[0, 0.75, 0]} name="BalanceChamber">
           <boxGeometry args={[0.9, 0.7, 0.7]} />
-          <meshPhysicalMaterial color="#e2e8f0" transparent opacity={0.22} roughness={0.05} />
+          <GlassMaterial opacity={0.26} />
         </mesh>
         {/* Pan */}
         <mesh position={[0, 0.48, 0]}>
@@ -258,13 +247,7 @@ export function Balance3D({
         {hasBeaker ? (
           <mesh position={[0, 0.62, 0]}>
             <cylinderGeometry args={[0.2, 0.18, 0.24, 20, 1, true]} />
-            <meshPhysicalMaterial
-              color="#e2e8f0"
-              transparent
-              opacity={0.4}
-              roughness={0.05}
-              side={THREE.DoubleSide}
-            />
+            <GlassMaterial opacity={0.52} />
           </mesh>
         ) : null}
         {/* Display: DOM overlay showing the public mass */}
@@ -320,13 +303,7 @@ export function MeasuringCylinder3D({
         </mesh>
         <mesh position={[0, 0.87, 0]} castShadow name="CylinderTube">
           <cylinderGeometry args={[0.2, 0.2, 1.5, 20, 1, true]} />
-          <meshPhysicalMaterial
-            color="#e2e8f0"
-            transparent
-            opacity={0.3}
-            roughness={0.05}
-            side={THREE.DoubleSide}
-          />
+          <GlassMaterial />
         </mesh>
         {h > 0.001 ? (
           <mesh position={[0, 0.12 + h / 2, 0]}>
@@ -337,7 +314,7 @@ export function MeasuringCylinder3D({
         {/* Spout */}
         <mesh position={[0.2, 1.65, 0]} rotation={[0, 0, -0.5]}>
           <coneGeometry args={[0.06, 0.18, 12, 1, true]} />
-          <meshPhysicalMaterial color="#e2e8f0" transparent opacity={0.35} roughness={0.05} />
+          <GlassMaterial opacity={GLASS_THICK_OPACITY} />
         </mesh>
       </Selectable3DObject>
     </group>
@@ -455,7 +432,7 @@ export function GlassRod3D({
         <group ref={rod}>
           <mesh rotation={[0, 0, Math.PI / 2.2]} castShadow>
             <cylinderGeometry args={[0.035, 0.035, 1.1, 12]} />
-            <meshPhysicalMaterial color="#e2e8f0" transparent opacity={0.5} roughness={0.05} />
+            <GlassMaterial opacity={GLASS_THICK_OPACITY} />
           </mesh>
         </group>
       </Selectable3DObject>
@@ -531,23 +508,11 @@ export function VolumetricFlask3D({
       <Selectable3DObject selected={selected} onSelect={onSelect} name="Volumetric flask">
         <mesh position={[0, 0.28, 0]} castShadow>
           <sphereGeometry args={[0.3, 20, 16]} />
-          <meshPhysicalMaterial
-            color="#e2e8f0"
-            transparent
-            opacity={0.3}
-            roughness={0.05}
-            side={THREE.DoubleSide}
-          />
+          <GlassMaterial />
         </mesh>
         <mesh position={[0, 0.72, 0]}>
           <cylinderGeometry args={[0.08, 0.08, 0.6, 14, 1, true]} />
-          <meshPhysicalMaterial
-            color="#e2e8f0"
-            transparent
-            opacity={0.3}
-            roughness={0.05}
-            side={THREE.DoubleSide}
-          />
+          <GlassMaterial />
         </mesh>
       </Selectable3DObject>
     </group>

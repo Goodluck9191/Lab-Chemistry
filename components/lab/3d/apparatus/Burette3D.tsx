@@ -15,6 +15,7 @@ import {
 } from "../simulation/stopcock";
 import { BuretteLiquid } from "../liquids";
 import { Selectable3DObject } from "../interactions";
+import { GLASS_THICK_OPACITY, GlassMaterial } from "./glass";
 
 /**
  * The 3D burette: stand, clamp, glass tube, scale, liquid, meniscus, stopcock,
@@ -263,14 +264,7 @@ export function Burette3D({
           <cylinderGeometry
             args={[TUBE_RADIUS, TUBE_RADIUS, TUBE_BOTTOM_Y - TUBE_TOP_Y, 28, 1, true]}
           />
-          <meshPhysicalMaterial
-            color="#e2e8f0"
-            transparent
-            opacity={0.28}
-            roughness={0.05}
-            metalness={0}
-            side={THREE.DoubleSide}
-          />
+          <GlassMaterial />
         </mesh>
         <ScaleTicks capacityMl={capacityMl} />
         <group name="Liquid">
@@ -285,13 +279,7 @@ export function Burette3D({
         {/* Tip */}
         <mesh position={[TUBE_CENTER_X, 2.18, 0]} name="Tip">
           <coneGeometry args={[0.09, 0.24, 16, 1, true]} />
-          <meshPhysicalMaterial
-            color="#e2e8f0"
-            transparent
-            opacity={0.35}
-            roughness={0.05}
-            side={THREE.DoubleSide}
-          />
+          <GlassMaterial opacity={GLASS_THICK_OPACITY} />
         </mesh>
         {/* Air bubble: visible until the student expels it through the tip */}
         {airBubble ? (

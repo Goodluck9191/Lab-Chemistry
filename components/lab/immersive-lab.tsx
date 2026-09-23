@@ -220,7 +220,10 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
         onResults={() => setDrawer(drawer === "results" ? null : "results")}
       />
 
-      <ContextPrompt reagents={reagents} />
+      {/* Reading Mode is the precision view (§15): the action card would sit
+          right over the flask and the scale, so it stands down while the
+          student is reading a meniscus and comes back when they close. */}
+      {readingMode ? null : <ContextPrompt reagents={reagents} />}
 
       {readingMode ? <ReadingOverlay onClose={() => setReadingMode(false)} /> : null}
 
