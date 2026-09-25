@@ -90,6 +90,16 @@ export interface GradingRule {
   description: string;
 }
 
+export interface QuestionDefinition {
+  key: string;
+  prompt: string;
+  keywords: string[];
+  fullMarksAt: number;
+  halfMarksAt: number;
+  points: number;
+  isRequired: boolean;
+}
+
 /**
  * A complete experiment definition. Hidden experimental parameters are NOT part
  * of this type: they are generated per attempt, server-side, and live in the
@@ -114,6 +124,7 @@ export interface ExperimentDefinition {
   apparatus: Apparatus[];
   calculations: CalculationDefinition[];
   observations: ObservationDefinition[];
+  questions: QuestionDefinition[];
   gradingRules: GradingRule[];
   configVersion: number;
   /** "assumed" marks chemistry not yet verified against the practical manual. */

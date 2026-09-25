@@ -16,6 +16,7 @@ import type {
   CalculationDefinition,
   ExperimentDefinition,
   ObservationDefinition,
+  QuestionDefinition,
 } from "@/domain/experiments/types";
 import { exp02Standardisation } from "./exp-02-standardisation";
 
@@ -56,6 +57,12 @@ export function declaredObservationFieldsFor(experimentId: string): DeclaredObse
   }));
 }
 
+/** The declared report question with its deterministic keyword rubric. */
+export type DeclaredQuestion = Pick<
+  QuestionDefinition,
+  "key" | "prompt" | "keywords" | "fullMarksAt" | "halfMarksAt" | "points" | "isRequired"
+>;
+
 export function declaredCalculationPromptsFor(experimentId: string): DeclaredCalculation[] {
   const definition = experimentDefinitionFor(experimentId);
   if (!definition) return [];
@@ -64,5 +71,23 @@ export function declaredCalculationPromptsFor(experimentId: string): DeclaredCal
     prompt: calculation.prompt,
     unit: calculation.unit,
     decimalPlaces: calculation.decimalPlaces,
+  }));
+}
+
+/**
+ * Report questions for an attempt. An empty list means the experiment
+ * declares no questions, and the application layer then accepts no answers.
+ */
+export function declaredQuestionsFor(experimentId: string): DeclaredQuestion[] {
+  const definition = experimentDefinitionFor(experimentId);
+  if (!definition) return [];
+  return (definition.questions ?? []).map((question) => ({
+    key: question.key,
+    prompt: question.prompt,
+    keywords: [...question.keywords],
+    fullMarksAt: question.fullMarksAt,
+    halfMarksAt: question.halfMarksAt,
+    points: question.points,
+    isRequired: question.isRequired,
   }));
 }

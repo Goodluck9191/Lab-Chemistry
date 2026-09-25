@@ -12,6 +12,10 @@ import {
   type SubmitAttemptResult,
 } from "./submit-attempt";
 import {
+  saveReportAnswers,
+  type SaveReportAnswersResult,
+} from "./report-answers";
+import {
   isControlFlowError,
   runLabAction,
   type LabActionOutcome,
@@ -129,6 +133,25 @@ export async function saveReportDraftAction(
     return {
       status: "error",
       message: "The report draft could not be saved. Check your connection and try again.",
+    };
+  }
+}
+
+/**
+ * Report-question answers write path. Same shape as the draft path: student
+ * data in, ownership and writability checked server-side.
+ */
+export async function saveReportAnswersAction(
+  rawAttemptId: unknown,
+  rawAnswers: unknown,
+): Promise<SaveReportAnswersResult> {
+  try {
+    return await saveReportAnswers(String(rawAttemptId), rawAnswers);
+  } catch (error) {
+    if (isControlFlowError(error)) throw error;
+    return {
+      status: "error",
+      message: "The answers could not be saved. Check your connection and try again.",
     };
   }
 }

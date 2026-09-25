@@ -553,6 +553,7 @@ const reportRowSchema = z.object({
   conclusion: z.string(),
   safety_notes: z.string(),
   readings_snapshot: z.record(z.string(), z.unknown()),
+  answers: z.record(z.string(), z.unknown()).default({}),
   submitted_at: z.string().nullable(),
 });
 
@@ -570,6 +571,8 @@ export interface AttemptReport extends ReportSections {
   status: "draft" | "submitted" | "reviewed";
   /** Frozen public readings at submit time. Never sent to the browser. */
   readingsSnapshot: Record<string, unknown>;
+  /** Student's report-question answers, keyed by question key. Student data only. */
+  answers: Record<string, unknown>;
   submittedAt: string | null;
 }
 
@@ -584,6 +587,7 @@ function mapReportRow(row: z.infer<typeof reportRowSchema>): AttemptReport {
     conclusion: row.conclusion,
     safetyNotes: row.safety_notes,
     readingsSnapshot: { ...row.readings_snapshot },
+    answers: { ...row.answers },
     submittedAt: row.submitted_at,
   };
 }
@@ -597,7 +601,7 @@ export async function getReportForAttempt(
     .from("reports")
     .select(
       "id, attempt_id, status, aim, procedure, results_summary, conclusion, " +
-        "safety_notes, readings_snapshot, submitted_at",
+        "safety_notes, readings_snapshot, answers, submitted_at",
     )
     .eq("attempt_id", attemptId)
     .maybeSingle();
@@ -642,6 +646,29 @@ export async function upsertReportDraft(
         conclusion: row.conclusion,
         safety_notes: row.safety_notes,
       }),
+    },
+  );
+}
+
+/**
+ * Saves the student's report-question answers as a draft. Only while the
+ * attempt is writable: the RLS insert/update policies refuse writes on a
+ * submitted attempt, so a frozen report can never gain new answers.
+ */
+export async function saveReportAnswers(
+  client: SupabaseClient,
+  attemptId: string,
+  answers: Record<string, string>,
+): Promise<void> {
+  await writeRowsIdempotently(
+    client,
+    [{ attempt_id: attemptId, status: "draft", answers }],
+    {
+      table: "reports",
+      onConflict: "attempt_id",
+      errorLabel: "Failed to save report answers",
+      identityOf: () => ({ attempt_id: attemptId }),
+      mutableOf: (row) => ({ answers: row.answers }),
     },
   );
 }

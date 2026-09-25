@@ -71,6 +71,7 @@ export const COLUMN_GRANTS: Record<string, { insert: string[]; update: string[] 
       "safety_notes",
       "readings_snapshot",
       "submitted_at",
+      "answers",
     ],
     update: [
       "status",
@@ -81,6 +82,7 @@ export const COLUMN_GRANTS: Record<string, { insert: string[]; update: string[] 
       "safety_notes",
       "readings_snapshot",
       "submitted_at",
+      "answers",
     ],
   },
   attempt_state: {

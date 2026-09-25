@@ -62,6 +62,24 @@ export const gradingRuleSchema = z.object({
   description: z.string().min(1).max(400),
 });
 
+/**
+ * A report question with a deterministic keyword rubric. Answers are free
+ * text; scoring counts case-insensitive keyword presence (never exact-string
+ * matching, never runtime-invented criteria). Each matched keyword band maps
+ * to fixed points, and the instructor reviews every answer.
+ */
+export const questionSchema = z.object({
+  key: z.string().min(1).max(64),
+  prompt: z.string().min(1).max(600),
+  keywords: z.array(z.string().min(1).max(60)).min(1),
+  /** Matches at or above this count earn full points. */
+  fullMarksAt: z.number().int().min(1),
+  /** Matches at or above this count earn half points. */
+  halfMarksAt: z.number().int().min(1),
+  points: z.number().positive().max(12),
+  isRequired: z.boolean(),
+});
+
 const baseDefinitionSchema = z.object({
   id: z.string().regex(/^exp-\d{2}$/, { error: "experiment id must look like exp-02" }),
   number: z.number().int().min(1).max(99),
@@ -83,6 +101,7 @@ const baseDefinitionSchema = z.object({
   apparatus: z.array(apparatusSchema).min(1),
   calculations: z.array(calculationSchema).min(1),
   observations: z.array(observationSchema),
+  questions: z.array(questionSchema).default([]),
   gradingRules: z.array(gradingRuleSchema).min(1),
   configVersion: z.number().int().min(1),
   accuracy: z.enum(["assumed", "manual-verified"]),

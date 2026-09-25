@@ -1,6 +1,9 @@
 import "server-only";
 import { z } from "zod";
-import { declaredObservationFieldsFor } from "@/domain/experiments/catalog/catalog-registry";
+import {
+  declaredObservationFieldsFor,
+  declaredQuestionsFor,
+} from "@/domain/experiments/catalog/catalog-registry";
 import { toPublicJSON, type TitrationPublicState } from "@/domain/simulation/titration/engine";
 import {
   projectExperimentWorkflow,
@@ -14,6 +17,8 @@ import {
   upsertReportDraft,
   type ReportSections,
 } from "@/infrastructure/supabase/repositories/attempts";
+import { gradeAttemptOnSubmit, missingRequiredAnswers, persistAutoGrade } from "./grade-attempt";
+import { createAdminSupabaseClient } from "@/infrastructure/supabase/admin";
 import { loadTitrationAttempt } from "./apply-simulation-action";
 import { attemptIdSchema } from "./schemas";
 
@@ -40,17 +45,32 @@ export const EMPTY_REPORT_SECTIONS: ReportSections = {
  * The submit gate, factored pure for testing: every unmet requirement in
  * student-facing words. Empty means the attempt may be submitted. The workflow
  * is derived from the PUBLIC projection, so the gate can neither leak hidden
- * values nor disagree with what the student sees.
+ * values nor disagree with what the student sees. Beyond bench work, a
+ * submittable report needs answered questions and a written conclusion.
  */
 export function submitBlockersFor(
   experimentId: string,
   config: WorkflowConfigInput,
   publicState: TitrationPublicState,
+  report?: { answers?: Record<string, unknown>; conclusion?: string },
 ): string[] {
   const required = declaredObservationFieldsFor(experimentId)
     .filter((field) => field.isRequired)
     .map((field) => ({ fieldKey: field.fieldKey, prompt: field.prompt }));
-  return [...projectExperimentWorkflow(config, publicState, required).blockers];
+  const blockers = [...projectExperimentWorkflow(config, publicState, required).blockers];
+  if (report) {
+    const missing = missingRequiredAnswers(
+      declaredQuestionsFor(experimentId),
+      report.answers ?? {},
+    );
+    for (const key of missing) {
+      blockers.push(`Answer report question ${key} on the report page.`);
+    }
+    if ((report.conclusion ?? "").trim().length === 0) {
+      blockers.push("Write the report conclusion before submitting.");
+    }
+  }
+  return blockers;
 }
 
 export type SaveReportDraftResult = { status: "ok" } | { status: "error"; message: string };
@@ -86,13 +106,15 @@ export type SubmitAttemptResult =
 
 /**
  * Submit an attempt: verify the workflow gate server-side, freeze the report
- * (sections + a frozen copy of the public readings), then mark the attempt
- * submitted so the laboratory turns read-only.
+ * (sections + a frozen copy of the public readings), run the automatic
+ * assessment, then mark the attempt submitted so the laboratory turns
+ * read-only.
  *
  * ORDER MATTERS: the report is written first, because once the attempt is
- * submitted the RLS write policies no longer match the student. If the attempt
- * update fails afterwards, the student simply retries: both writes are
- * idempotent and the attempt stays writable until the transition lands.
+ * submitted the RLS write policies no longer match the student. The grade is
+ * persisted before the status transition too, so a failed submit leaves the
+ * attempt writable and retryable; both writes are idempotent. If grading
+ * itself fails, the error surfaces and nothing is marked submitted.
  */
 export async function submitAttempt(rawAttemptId: string): Promise<SubmitAttemptResult> {
   const attemptId = attemptIdSchema.parse(rawAttemptId);
@@ -105,12 +127,6 @@ export async function submitAttempt(rawAttemptId: string): Promise<SubmitAttempt
     return { status: "error", message: "This attempt can no longer be submitted." };
   }
 
-  const publicState = toPublicJSON(loaded.session);
-  const blockers = submitBlockersFor(loaded.experimentId, loaded.config, publicState);
-  if (blockers.length > 0) {
-    return { status: "blocked", blockers };
-  }
-
   const supabase = await createServerSupabaseClient();
   const existing = await getReportForAttempt(supabase, attemptId);
   const sections: ReportSections = {
@@ -120,10 +136,31 @@ export async function submitAttempt(rawAttemptId: string): Promise<SubmitAttempt
     conclusion: existing?.conclusion ?? "",
     safetyNotes: existing?.safetyNotes ?? "",
   };
+  const answers: Record<string, unknown> = { ...(existing?.answers ?? {}) };
+
+  const publicState = toPublicJSON(loaded.session);
+  const blockers = submitBlockersFor(loaded.experimentId, loaded.config, publicState, {
+    answers,
+    conclusion: sections.conclusion,
+  });
+  if (blockers.length > 0) {
+    return { status: "blocked", blockers };
+  }
+
   // A plain-JSON frozen copy of the PUBLIC projection: safe by construction,
   // and what was marked can never change under a later edit.
   const readingsSnapshot = JSON.parse(JSON.stringify(publicState)) as Record<string, unknown>;
   await submitReportForAttempt(supabase, attemptId, sections, readingsSnapshot);
+  // Automatic assessment from the frozen state: deterministic, server-side,
+  // persisted through the service-role path (students can never write it).
+  const graded = gradeAttemptOnSubmit({
+    session: loaded.session,
+    config: loaded.config,
+    experimentId: loaded.experimentId,
+    answers,
+    sections,
+  });
+  await persistAutoGrade(createAdminSupabaseClient(), attemptId, graded);
   await markAttemptSubmitted(supabase, attemptId);
   return { status: "ok", alreadySubmitted: false };
 }

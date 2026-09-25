@@ -74,6 +74,8 @@ export interface LabReportView {
   resultsSummary: string;
   conclusion: string;
   safetyNotes: string;
+  /** Student's report-question answers, keyed by question key. Student data only. */
+  answers: Record<string, string>;
   submittedAt: string | null;
 }
 
@@ -251,6 +253,11 @@ export async function getLabState(rawAttemptId: string): Promise<LabStateView> {
           resultsSummary: storedReport.resultsSummary,
           conclusion: storedReport.conclusion,
           safetyNotes: storedReport.safetyNotes,
+          answers: Object.fromEntries(
+            Object.entries(storedReport.answers).filter(
+              (entry): entry is [string, string] => typeof entry[1] === "string",
+            ),
+          ),
           submittedAt: storedReport.submittedAt,
         }
       : null,

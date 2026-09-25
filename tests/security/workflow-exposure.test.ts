@@ -97,6 +97,7 @@ describe("phase 5 workflow exposure", () => {
         resultsSummary: "Concordant.",
         conclusion: "Done.",
         safetyNotes: "Goggles.",
+        answers: {},
         submittedAt: null,
       },
     });

@@ -640,6 +640,42 @@ export function reportMolarity(
   return { ok: true, correct, expected: roundTo(expected, 6) };
 }
 
+export interface GradedTrialCalculation {
+  readonly trialNumber: number;
+  readonly studentMolarityM: number;
+  readonly expectedMolarityM: number;
+  readonly toleranceM: number;
+  readonly correct: boolean;
+}
+
+/**
+ * Server-side grading projection for every reported trial on a stage. PURE:
+ * it reads the hidden truth but mutates nothing (unlike `reportMolarity`,
+ * which records the student's submission). The caller persists
+ * `is_correct`/`expected_value` through the privileged path; only the
+ * boolean verdict may ever reach the student.
+ */
+export function gradedTrialCalculations(
+  session: TitrationSession,
+  stageKey: string,
+): GradedTrialCalculation[] {
+  const stage = mutableStage(session, stageKey);
+  return stage.trials
+    .filter((trial) => trial.status === "recorded" && trial.reportedMolarityM !== null)
+    .map((trial) => {
+      const expected = expectedMolarityForTrial(session, stageKey, trial);
+      const tolerance = Math.max(0.005, expected * 0.02);
+      const student = trial.reportedMolarityM as number;
+      return {
+        trialNumber: trial.trialNumber,
+        studentMolarityM: student,
+        expectedMolarityM: roundTo(expected, 6),
+        toleranceM: roundTo(tolerance, 6),
+        correct: Math.abs(student - expected) <= tolerance + 1e-12,
+      };
+    });
+}
+
 function expectedMolarityForTrial(
   session: TitrationSession,
   stageKey: string,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import {
   submitAttemptAction,
 } from "@/application/attempts/actions";
 import type { LabStateView } from "@/application/attempts/lab-state";
+import { declaredQuestionsFor } from "@/domain/experiments/catalog/catalog-registry";
 import { projectExperimentWorkflow } from "@/domain/simulation/titration/workflow";
 import { useLabServer } from "./lab-state-provider";
 
@@ -57,6 +59,18 @@ export function ReviewSubmitPanel({ initialState }: { initialState: LabStateView
   const frozen = !canWrite || submitted;
   const pending = actionPending || reportPending;
 
+  // Report-page requirements (questions + conclusion) gate submission
+  // server-side; the panel shows their live status so nothing surprises.
+  const questions = useMemo(
+    () => declaredQuestionsFor(initialState.experimentId),
+    [initialState.experimentId],
+  );
+  const savedAnswers = initialState.report?.answers ?? {};
+  const answeredCount = questions.filter((question) => {
+    const raw = savedAnswers[question.key];
+    return typeof raw === "string" && raw.trim().length > 0;
+  }).length;
+
   function setSection(key: keyof typeof sections, value: string) {
     setSections((current) => ({ ...current, [key]: value }));
     setDraftSaved(false);
@@ -102,6 +116,14 @@ export function ReviewSubmitPanel({ initialState }: { initialState: LabStateView
           {initialState.report?.submittedAt
             ? ` Submitted ${new Date(initialState.report.submittedAt).toLocaleString()}.`
             : null}
+        </p>
+        <p className="text-sm">
+          <Link
+            href={`/student/reports/${attemptId}`}
+            className="font-semibold text-primary hover:underline"
+          >
+            View the report and automatic assessment →
+          </Link>
         </p>
       </section>
     );
@@ -209,10 +231,19 @@ export function ReviewSubmitPanel({ initialState }: { initialState: LabStateView
           <Button size="sm" onClick={handleSubmit} disabled={pending}>
             {reportPending ? "Submitting…" : "Submit attempt"}
           </Button>
+          <Link
+            href={`/student/reports/${attemptId}`}
+            className="text-xs font-semibold text-primary hover:underline"
+          >
+            Continue to Report →
+          </Link>
         </div>
         <p className="text-xs text-muted">
           Submission freezes the readings. The server checks every requirement first and tells
-          you exactly what is missing.
+          you exactly what is missing — including report questions ({answeredCount}/
+          {questions.length} answered) and the conclusion
+          {sections.conclusion.trim().length > 0 ? " (written)" : " (missing)"}. Answer the
+          questions on the report page, then return here to submit.
         </p>
         {submitBlockers ? (
           <Alert tone="warning" title="Not ready to submit yet">
