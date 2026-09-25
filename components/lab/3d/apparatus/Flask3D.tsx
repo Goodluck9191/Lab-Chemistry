@@ -47,6 +47,7 @@ export function Flask3D({
   dragEnabled,
   heldInHand = false,
   heldYawRadians = 0,
+  heldTiltRadians = 0,
   onSelect,
   onDrop,
 }: {
@@ -64,6 +65,8 @@ export function Flask3D({
   heldInHand?: boolean;
   /** How the carried flask is turned in the hand, radians. */
   heldYawRadians?: number;
+  /** How far the carried flask is tipped — the pour gesture, radians. */
+  heldTiltRadians?: number;
   onSelect: () => void;
   onDrop: (point: BenchPoint) => void;
 }) {
@@ -74,6 +77,7 @@ export function Flask3D({
   const root = useRef<THREE.Group>(null);
   const camera = useThree((state) => state.camera);
   const yaw = useRef(0);
+  const tilt = useRef(0);
 
   const shown = dragPos ?? flaskPos;
   const liquidHeight = flaskLiquidHeight(volumeMl, {
@@ -100,6 +104,10 @@ export function Flask3D({
       const targetYaw = heldInHand ? heldYawRadians : 0;
       yaw.current += (targetYaw - yaw.current) * Math.min(1, delta * 10);
       root.current.rotation.y = yaw.current;
+      // Tipping, only in the hand, eased like the wrist that does it.
+      const targetTilt = heldInHand ? heldTiltRadians : 0;
+      tilt.current += (targetTilt - tilt.current) * Math.min(1, delta * 10);
+      root.current.rotation.x = tilt.current;
     }
     if (!rock.current) return;
     const target = swirling && !dragging ? Math.sin(swirlPhase * 6) * 0.08 : 0;

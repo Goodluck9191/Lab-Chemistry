@@ -10,7 +10,14 @@
  * pressing keys in a browser.
  */
 
-export type LabCommand = "interact" | "rotate" | "focus" | "confirm" | "cancel";
+export type LabCommand =
+  | "interact"
+  | "rotate"
+  | "focus"
+  | "confirm"
+  | "cancel"
+  | "tilt"
+  | "level";
 
 export interface LabKeybind {
   command: LabCommand;
@@ -37,6 +44,20 @@ export const LAB_KEYBINDS: readonly LabKeybind[] = [
     code: "KeyR",
     label: "Rotate",
     description: "Turn the object you are holding",
+  },
+  {
+    command: "tilt",
+    key: "T",
+    code: "KeyT",
+    label: "Tip",
+    description: "Tip what you are holding, to pour from it",
+  },
+  {
+    command: "level",
+    key: "G",
+    code: "KeyG",
+    label: "Level",
+    description: "Bring what you are holding back upright",
   },
   {
     command: "focus",

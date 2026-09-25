@@ -32,6 +32,7 @@ export function Beaker3D({
   dragEnabled = false,
   heldInHand = false,
   heldYawRadians = 0,
+  heldTiltRadians = 0,
   onDrop,
 }: {
   position: [number, number, number];
@@ -46,6 +47,8 @@ export function Beaker3D({
   heldInHand?: boolean;
   /** How the carried beaker is turned in the hand, radians. */
   heldYawRadians?: number;
+  /** How far the carried beaker is tipped — the pour gesture, radians. */
+  heldTiltRadians?: number;
   onDrop?: (point: BenchPoint) => void;
 }) {
   const liquidH = straightWallLiquidHeight(liquidMl, {
@@ -59,6 +62,7 @@ export function Beaker3D({
   const root = useRef<THREE.Group>(null);
   const camera = useThree((state) => state.camera);
   const yaw = useRef(0);
+  const tilt = useRef(0);
   const shownX = dragPos?.x ?? position[0];
   const shownZ = dragPos?.z ?? position[2];
 
@@ -79,6 +83,11 @@ export function Beaker3D({
     const targetYaw = heldInHand ? heldYawRadians : 0;
     yaw.current += (targetYaw - yaw.current) * Math.min(1, delta * 10);
     root.current.rotation.y = yaw.current;
+    // Tipping the vessel: only while it is in the hand, and eased so a keypress
+    // or a drag reads as the student's wrist rather than a teleport.
+    const targetTilt = heldInHand ? heldTiltRadians : 0;
+    tilt.current += (targetTilt - tilt.current) * Math.min(1, delta * 10);
+    root.current.rotation.x = tilt.current;
   });
 
   const beginDrag = (event: ThreeEvent<PointerEvent>) => {

@@ -26,8 +26,9 @@ import {
   stopcockPositionFor,
   type StopcockPosition,
 } from "./3d/simulation/stopcock";
-import type { CarryKind } from "./3d/interactions/carry";
+import type { HoldableKind } from "./3d/interactions/carry";
 import { NO_ROTATION, rotateBy, type HeldRotation } from "./3d/simulation/keymap";
+import { NEUTRAL_HOLD, clampTilt, tiltBy, type HoldPose } from "./3d/interactions/hold";
 import type { PhysicalSelectionKey } from "./3d/simulation/apparatus-state";
 import type { BenchPoint } from "./3d/simulation/spatial";
 
@@ -94,12 +95,23 @@ export interface LabUiContextValue {
   /** The apparatus the crosshair is on right now, if any. */
   lookedAtKey: PhysicalSelectionKey;
   setLookedAtKey: (key: PhysicalSelectionKey) => void;
-  /** Vessel physically in the student's hand, if any. */
-  carried: CarryKind | null;
-  setCarried: (kind: CarryKind | null) => void;
+  /** Object physically in the student's hand, if any. */
+  carried: HoldableKind | null;
+  setCarried: (kind: HoldableKind | null) => void;
   /** How the carried object is turned in the hand (visual only). */
   carriedRotation: HeldRotation;
   rotateCarried: (direction: 1 | -1) => void;
+  /** How far the carried object is tipped — what turns holding into pouring. */
+  carriedTilt: number;
+  /** Tip the held object further, or level it back off (the pour gesture). */
+  tiltCarried: (direction: 1 | -1) => void;
+  /** Set the tilt directly — what a drag on the held vessel reports. */
+  setCarriedTilt: (radians: number) => void;
+  /** The hand's full pose, for the pour rules and the mesh. */
+  heldPose: HoldPose;
+  /** Whether the burette is physically clamped and can be read or titrated. */
+  buretteMounted: boolean;
+  setBuretteMounted: (mounted: boolean) => void;
   /** Whether the contextual action card is open. */
   promptOpen: boolean;
   setPromptOpen: (open: boolean) => void;
@@ -181,8 +193,10 @@ export function LabStateProvider({
   const [stopcockAngles, setStopcockAngles] = useState<Record<string, number>>({});
   const [currentStopcockStage, setCurrentStopcockStage] = useState<string | null>(null);
   const [lookedAtKey, setLookedAtKey] = useState<PhysicalSelectionKey>(null);
-  const [carried, setCarried] = useState<CarryKind | null>(null);
+  const [carried, setCarriedState] = useState<HoldableKind | null>(null);
   const [carriedRotation, setCarriedRotation] = useState<HeldRotation>(NO_ROTATION);
+  const [carriedTilt, setCarriedTiltState] = useState(0);
+  const [buretteMounted, setBuretteMounted] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
   const [walkMode, setWalkMode] = useState(true);
   const [pointerLocked, setPointerLocked] = useState(false);
@@ -281,6 +295,24 @@ export function LabStateProvider({
     // Rotation belongs to whatever is in the hand; letting go re-homes it.
   }, []);
 
+  const tiltCarried = useCallback((direction: 1 | -1) => {
+    setCarriedTiltState((current) => tiltBy({ yawRadians: 0, tiltRadians: current }, direction).tiltRadians);
+  }, []);
+
+  const setCarriedTilt = useCallback((radians: number) => {
+    setCarriedTiltState(clampTilt(radians));
+  }, []);
+
+  /**
+   * Pick an object up, or put one down. A new object always arrives upright
+   * and square in the hand: you do not catch a beaker already tipped.
+   */
+  const setCarried = useCallback((kind: HoldableKind | null) => {
+    setCarriedState(kind);
+    setCarriedRotation(NO_ROTATION);
+    setCarriedTiltState(NEUTRAL_HOLD.tiltRadians);
+  }, []);
+
   // A valve that is open on one stage closes the previous one: the student has
   // exactly one open tap, matching the single physical burette on the bench.
   const stopcockOpenForStage =
@@ -307,13 +339,15 @@ export function LabStateProvider({
     lookedAtKey,
     setLookedAtKey,
     carried,
-    setCarried: (kind) => {
-      setCarried(kind);
-      // A new object arrives in the hand at its natural orientation.
-      setCarriedRotation(NO_ROTATION);
-    },
+    setCarried,
     carriedRotation,
     rotateCarried,
+    carriedTilt,
+    tiltCarried,
+    setCarriedTilt,
+    heldPose: { yawRadians: carriedRotation.yawRadians, tiltRadians: carriedTilt },
+    buretteMounted,
+    setBuretteMounted,
     promptOpen,
     setPromptOpen,
     walkMode,

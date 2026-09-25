@@ -18,7 +18,15 @@ import {
   BENCH_BOUNDS,
   BEAKER_SLOT,
   BENCH_TOP_Y,
+  BURETTE_CRADLE_SLOT,
+  CYLINDER_SLOT,
   FLASK_TILE_SLOT,
+  GLASS_ROD_SLOT,
+  KHP_SLOT,
+  STOPPER_SLOT,
+  STOCK_BOTTLE_SLOT,
+  VOLUMETRIC_FLASK_SLOT,
+  WATER_BOTTLE_SLOT,
   clampToBench,
   isInZone,
   PLACEMENT_ZONES,
@@ -26,6 +34,7 @@ import {
   snapFlaskOnDrop,
   type BenchPoint,
 } from "../simulation/spatial";
+import { buretteMountOutcome } from "./mounting";
 
 /** Vessels the student can physically hold. */
 export type CarryKind = "flask" | "beaker";
@@ -172,4 +181,215 @@ export function carryKindFor(key: string | null): CarryKind | null {
   if (key === "beaker_250") return "beaker";
   if (key === "conical_flask") return "flask";
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// The general holdable model.
+//
+// The first version of carrying knew only the two vessels that could pour. The
+// laboratory has more in it than that: a burette to hang on the clamp, a
+// measuring cylinder to draw acid into, reagent bottles to pour from. Rather
+// than teach every mesh its own handling rules, each holdable names itself
+// once here — what it is called, whether it pours, whether it mounts, and where
+// it lives — and the gesture, the prompt and the release logic all read from
+// that one table.
+//
+// The original `carryKindFor`/`primaryVerbFor` are left alone: the vessel-only
+// path still works, and this broader model is additive.
+// ---------------------------------------------------------------------------
+
+/** Everything a student can pick up and put down. */
+export type HoldableKind =
+  | CarryKind
+  | "burette"
+  | "cylinder"
+  | "volumetric_flask"
+  | "glass_rod"
+  | "stopper"
+  | "stock_bottle"
+  | "water_bottle"
+  | "khp"
+  | "indicator"
+  | "spatula";
+
+export interface HoldSpec {
+  kind: HoldableKind;
+  /** As a student would say it. */
+  label: string;
+  /** Can its contents be poured out when tipped? */
+  pourable: boolean;
+  /** Hangs on the clamp rather than resting on the bench. */
+  mounts: boolean;
+  /** Where it rests when it is not being held. */
+  home: BenchPoint;
+  /** What it is for, shown on the prompt. */
+  role: string;
+}
+
+export const HOLD_SPECS: Record<HoldableKind, HoldSpec> = {
+  flask: {
+    kind: "flask",
+    label: "Erlenmeyer flask",
+    pourable: true,
+    mounts: false,
+    home: { ...FLASK_TILE_SLOT },
+    role: "receives the solution",
+  },
+  beaker: {
+    kind: "beaker",
+    label: "250 mL beaker",
+    pourable: true,
+    mounts: false,
+    home: { ...BEAKER_SLOT },
+    role: "weighs and dissolves the KHP",
+  },
+  burette: {
+    kind: "burette",
+    label: "Burette, 50 mL",
+    pourable: false,
+    mounts: true,
+    home: { ...BURETTE_CRADLE_SLOT },
+    role: "delivers the titrant",
+  },
+  cylinder: {
+    kind: "cylinder",
+    label: "Measuring cylinder",
+    pourable: true,
+    mounts: false,
+    home: { ...CYLINDER_SLOT },
+    role: "measures the aliquot",
+  },
+  volumetric_flask: {
+    kind: "volumetric_flask",
+    label: "Volumetric flask",
+    pourable: true,
+    mounts: false,
+    home: { ...VOLUMETRIC_FLASK_SLOT },
+    role: "makes up the working solution",
+  },
+  glass_rod: {
+    kind: "glass_rod",
+    label: "Glass stirring rod",
+    pourable: false,
+    mounts: false,
+    home: { ...GLASS_ROD_SLOT },
+    role: "stirs and transfers",
+  },
+  stopper: {
+    kind: "stopper",
+    label: "Rubber stopper",
+    pourable: false,
+    mounts: false,
+    home: { ...STOPPER_SLOT },
+    role: "seals the flask for mixing",
+  },
+  stock_bottle: {
+    kind: "stock_bottle",
+    label: "Stock NaOH",
+    pourable: true,
+    mounts: false,
+    home: { ...STOCK_BOTTLE_SLOT },
+    role: "the concentrated titrant",
+  },
+  water_bottle: {
+    kind: "water_bottle",
+    label: "Distilled water",
+    pourable: true,
+    mounts: false,
+    home: { ...WATER_BOTTLE_SLOT },
+    role: "dilutes the solution",
+  },
+  khp: {
+    kind: "khp",
+    label: "Potassium hydrogen phthalate",
+    pourable: true,
+    mounts: false,
+    home: { ...KHP_SLOT },
+    role: "the primary standard",
+  },
+  indicator: {
+    kind: "indicator",
+    label: "Phenolphthalein dropper",
+    pourable: true,
+    mounts: false,
+    home: { ...STOPPER_SLOT },
+    role: "marks the endpoint",
+  },
+  spatula: {
+    kind: "spatula",
+    label: "Spatula",
+    pourable: false,
+    mounts: false,
+    home: { ...KHP_SLOT },
+    role: "transfers the solid",
+  },
+};
+
+export function holdSpecFor(kind: HoldableKind): HoldSpec {
+  return HOLD_SPECS[kind];
+}
+
+/**
+ * The holdable a selected/looked-at object becomes, or null if it is fixed.
+ *
+ * Only the vessel that the SCENE can actually draw in the hand is offered
+ * here, so the logical state and the picture never disagree: a picked-up object
+ * that stayed on the bench would be worse than one that cannot be picked up.
+ * The other holdables are fully described in `HOLD_SPECS` and resolved by
+ * `holdReleaseFor`, so teaching their meshes to ride in front of the eye is a
+ * presentation change with the rules already in place — not a new model.
+ */
+export function holdKindFor(key: string | null): HoldableKind | null {
+  switch (key) {
+    case "beaker_250":
+      return "beaker";
+    case "conical_flask":
+      return "flask";
+    default:
+      return null;
+  }
+}
+
+/** The verb E performs with the broader holdable model. */
+export function holdVerbFor(
+  key: string | null,
+  held: HoldableKind | null,
+): { label: string; picksUp: boolean } {
+  if (held) return { label: "Set down", picksUp: false };
+  if (holdKindFor(key)) return { label: "Pick up", picksUp: true };
+  return { label: "Interact", picksUp: false };
+}
+
+/** What releasing a held object at this point means. */
+export type HoldRelease =
+  | { kind: "burette_mount"; mounted: boolean; pos: BenchPoint }
+  | { kind: "discard"; pos: BenchPoint }
+  | { kind: "balance"; pos: BenchPoint }
+  | { kind: "under_burette"; pos: BenchPoint }
+  | { kind: "rest"; pos: BenchPoint };
+
+/**
+ * Resolve a physical release. The rules are the same ones the drop gesture and
+ * the placement rings already use: over the waste means a disposal, on the pan
+ * means a weighing position, near the clamp means the burette mounts. Anything
+ * else simply rests where it was set down.
+ */
+export function holdReleaseFor(kind: HoldableKind, point: BenchPoint): HoldRelease {
+  const clamped = clampToBench(point);
+  if (kind === "burette") {
+    const outcome = buretteMountOutcome(clamped);
+    return { kind: "burette_mount", mounted: outcome.mounted, pos: outcome.pos };
+  }
+  if (isInZone(clamped, PLACEMENT_ZONES.waste)) {
+    return { kind: "discard", pos: clamped };
+  }
+  if (kind === "beaker" && isInZone(clamped, PLACEMENT_ZONES.balance)) {
+    return { kind: "balance", pos: snapBeakerOnDrop(clamped) };
+  }
+  if (kind === "flask") {
+    return isInZone(clamped, PLACEMENT_ZONES.buretteReceiving)
+      ? { kind: "under_burette", pos: snapFlaskOnDrop(clamped) }
+      : { kind: "rest", pos: clamped };
+  }
+  return { kind: "rest", pos: clamped };
 }

@@ -17,7 +17,7 @@ import { useActiveStage, useLabServer, useLabUi, useLabViewModel } from "./lab-s
 import { LabHud } from "./3d/ui/LabHud";
 import { ContextPrompt } from "./3d/ui/ContextPrompt";
 import { ReadingOverlay } from "./3d/ReadingOverlay";
-import { carryKindFor, canCarry, primaryVerbFor } from "./3d/interactions/carry";
+import { holdKindFor, canCarry, holdVerbFor } from "./3d/interactions/carry";
 import { commandForCode, isTextEntryTarget } from "./3d/simulation/keymap";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +48,7 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
     carried,
     setCarried,
     rotateCarried,
+    tiltCarried,
     promptOpen,
     setPromptOpen,
     walkMode,
@@ -66,7 +67,7 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
 
   /** What E acts on right now: what you selected, else what you are looking at. */
   const subjectKey = selectedReagentKey ? "reagent_bottle" : (selectedApparatusKey ?? lookedAtKey);
-  const verb = primaryVerbFor(subjectKey, carried);
+  const verb = holdVerbFor(subjectKey, carried);
   const carrying = canCarry({ canWrite, pending });
 
   /** The reagent list the prompt offers: enough to reach every reagent action. */
@@ -133,6 +134,19 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
         return;
       }
 
+      // Tipping is what turns holding into pouring: T tips the vessel further
+      // over, G brings it back upright. Both are the accessible equivalent of
+      // turning the wrist while carrying, and neither sends anything to the
+      // server on its own.
+      if (command === "tilt") {
+        if (carried) tiltCarried(1);
+        return;
+      }
+      if (command === "level") {
+        if (carried) tiltCarried(-1);
+        return;
+      }
+
       if (command === "focus") {
         const key = selectedApparatusKey ?? lookedAtKey;
         if (key === "burette") requestFocus("burette");
@@ -149,7 +163,7 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
           return;
         }
         if (verb.picksUp && carrying.available) {
-          const kind = carryKindFor(subjectKey);
+          const kind = holdKindFor(subjectKey);
           if (kind) {
             setCarried(kind);
             setPromptOpen(false);
@@ -175,6 +189,7 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
     setSelectedReagentKey,
     setCarried,
     rotateCarried,
+    tiltCarried,
     requestFocus,
     setPromptOpen,
     setReadingMode,
