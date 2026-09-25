@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { useActiveStage, useLabServer, useLabUi, useLabViewModel } from "../../lab-state-provider";
 import { Lab3DConcordanceStrip } from "../Lab3DActions";
 import { stopcockNotchFor } from "../simulation/stopcock";
-import { carryingLabel } from "../interactions/carry";
+import { holdSpecFor } from "../interactions/carry";
 import { rotationLabel } from "../simulation/keymap";
+import { tiltLabel } from "../interactions/hold";
 
 /**
  * The minimal HUD (§5).
@@ -47,6 +48,7 @@ export function LabHud({
     setWalkMode,
     carried,
     carriedRotation,
+    carriedTilt,
     promptOpen,
     setPromptOpen,
     activeStageKey,
@@ -143,6 +145,7 @@ export function LabHud({
           <span className="mx-1.5">·</span>
           WASD walk · mouse look · <span className="font-medium">E</span> interact ·{" "}
           <span className="font-medium">F</span> inspect · <span className="font-medium">R</span> rotate ·{" "}
+          <span className="font-medium">T</span> tip / <span className="font-medium">G</span> level to pour ·{" "}
           <span className="font-medium">Space</span> set down · <span className="font-medium">Esc</span> release
         </div>
         <div className="flex flex-col items-end gap-1">
@@ -152,8 +155,11 @@ export function LabHud({
               role="status"
               aria-label="Holding"
             >
-              Holding: <span className="font-medium">{carryingLabel(carried)}</span>
-              <span className="ms-2 text-muted">turned {rotationLabel(carriedRotation)}</span>
+              Holding: <span className="font-medium">{holdSpecFor(carried).label}</span>
+              <span className="ms-2 text-muted">
+                {tiltLabel({ yawRadians: carriedRotation.yawRadians, tiltRadians: carriedTilt })} ·{" "}
+                turned {rotationLabel(carriedRotation)}
+              </span>
             </div>
           ) : null}
           {valve.flowMode !== null ? (

@@ -19,10 +19,11 @@ import {
   WatchGlass3D,
   WasteContainer3D,
 } from "./apparatus/Vessels3D";
-import { LiquidStream3D, IndicatorBurst3D } from "./liquids";
+import { LiquidStream3D, IndicatorBurst3D, HeldPourStream3D } from "./liquids";
 import { PlacementZone3D, GuideMarker3D } from "./interactions";
 import { lookCandidates, lookTargetFor } from "./interactions/lookTarget";
-import { dropPointInFront, type CarryKind } from "./interactions/carry";
+import { dropPointInFront, type HoldableKind } from "./interactions/carry";
+import type { HoldPose } from "./interactions/hold";
 import {
   FIXED_SLOTS,
   type ApparatusFocusKey,
@@ -95,10 +96,14 @@ export interface Lab3DSceneProps {
   readingMode: boolean;
   dragEnabled: boolean;
   stirring: boolean;
-  /** Vessel physically in the student's hand, or null. */
-  carriedKind: CarryKind | null;
-  /** How the carried vessel is turned in the hand. */
+  /** Object physically in the student's hand, or null. */
+  carriedKind: HoldableKind | null;
+  /** How the carried object is turned in the hand. */
   carriedYawRadians: number;
+  /** How far the carried object is tipped out of the hand (how it pours). */
+  carriedTilt: number;
+  /** True while the held object is tipped far enough to be pouring. */
+  pouring: boolean;
   /** Receiving-zone highlight while placing. */
   zoneState: "idle" | "valid" | "invalid";
   /** WASD walking plus mouse-look; off leaves free orbit. */
@@ -216,6 +221,8 @@ export function Lab3DSceneContent(props: Lab3DSceneProps) {
     stirring,
     carriedKind,
     carriedYawRadians,
+    carriedTilt,
+    pouring,
     zoneState,
     moveEnabled,
     guideKey,
@@ -283,8 +290,16 @@ export function Lab3DSceneContent(props: Lab3DSceneProps) {
         dragEnabled={dragEnabled && carriedKind === null}
         heldInHand={carriedKind === "flask"}
         heldYawRadians={carriedYawRadians}
+        heldTiltRadians={carriedTilt}
         onSelect={() => onSelectApparatus("conical_flask")}
         onDrop={onFlaskDrop}
+      />
+
+      {/* The held vessel's own stream: it leaves the glass where the glass
+          actually is, and only while the student is tipping it. */}
+      <HeldPourStream3D
+        active={pouring && carriedKind !== null}
+        pose={{ yawRadians: carriedYawRadians, tiltRadians: carriedTilt } satisfies HoldPose}
       />
 
       <LiquidStream3D
@@ -347,6 +362,7 @@ export function Lab3DSceneContent(props: Lab3DSceneProps) {
         dragEnabled={dragEnabled && carriedKind === null}
         heldInHand={carriedKind === "beaker"}
         heldYawRadians={carriedYawRadians}
+        heldTiltRadians={carriedTilt}
         onDrop={onBeakerDrop}
       />
 

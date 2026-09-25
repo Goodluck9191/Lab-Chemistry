@@ -12,10 +12,14 @@ import {
   type FlowMode,
 } from "./3d/simulation/flow";
 import { stopcockIsOpen, stopcockFlowModeFor, stopcockRateMlPerSecond } from "./3d/simulation/stopcock";
-import { releasePointFor } from "./3d/interactions/carry";
+import { holdReleaseFor, type HoldableKind } from "./3d/interactions/carry";
+import { isPourTilt } from "./3d/interactions/hold";
+import { pourIntent, type PourTargets, type PourZone } from "./3d/interactions/pour";
+import { titrationNeedsMount } from "./3d/interactions/mounting";
+import { rinseBeakerAvailability, transferAvailability } from "./control-availability";
 import {
   FLASK_TILE_SLOT,
-  FLASK_UNDER_BURETTE_SLOT,
+  VOLUMETRIC_FLASK_SLOT,
   flaskReceivingValid,
   wastePlacementValid,
   type BenchPoint,
@@ -147,6 +151,9 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     setLookedAtKey,
     carried,
     carriedRotation,
+    carriedTilt,
+    heldPose,
+    setBuretteMounted,
     walkMode,
     stirring,
     setPointerLocked,
@@ -210,15 +217,25 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
 
   const trialOpen = stage?.openTrial !== null && stage?.openTrial !== undefined;
   const buretteSetup = stage?.burette.setup === true;
+  // The authoritative setup IS the physical mounting: the glass tube lives in
+  // the stand's assembly, so "set up" and "clamped on" are the same fact.
+  const mounted = buretteSetup;
+  const mountCheck = titrationNeedsMount({ mounted, flaskInReceiving });
   const readingMl = stage?.burette.readingMl ?? null;
   const capacityMl = stage?.burette.capacityMl ?? 50;
   const graduationMl = stage?.burette.graduationMl ?? 0.1;
   const buretteRemainingMl = readingMl === null ? 0 : Math.max(0, capacityMl - readingMl);
 
   // The open path: the valve is off its seat, a trial is running, the burette
-  // is prepared, and the flask is physically under the tip.
-  const pathOpen =
-    stopcockOpen && trialOpen && buretteSetup && interactive && flaskInReceiving && readingMl !== null;
+  // is physically mounted and the flask is under the tip. The mounting rule is
+  // expressed through `mounting.ts` so the physical precondition has one home.
+  const pathOpen = stopcockOpen && trialOpen && mountCheck.available && interactive && readingMl !== null;
+
+  // Keep the UI's mounting flag in step with the authoritative setup, so the
+  // prompt and the scene agree about whether the burette is up.
+  useEffect(() => {
+    setBuretteMounted(mounted);
+  }, [mounted, setBuretteMounted]);
 
   // ---- Swirl clock (visual only) -------------------------------------------
   useEffect(() => {
@@ -384,8 +401,13 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     carriedBefore.current = carried;
     if (carried !== null || previous === null) return;
     const point = dropPointRef.current;
-    if (previous === "flask") {
-      if (stage && wastePlacementValid(point)) {
+    const release = holdReleaseFor(previous, point);
+    if (release.kind === "burette_mount") {
+      setBuretteMounted(release.mounted);
+      return;
+    }
+    if (release.kind === "discard") {
+      if (stage) {
         const availability = discardAvailability(stage, { canWrite, pending });
         if (availability.available) {
           setFlaskBenchPos({ ...FLASK_TILE_SLOT });
@@ -393,15 +415,60 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
           return;
         }
       }
-      setFlaskBenchPos(flaskReceivingValid(point) ? { ...FLASK_UNDER_BURETTE_SLOT } : point);
+      setFlaskBenchPos(release.pos);
+      return;
+    }
+    if (previous === "flask") {
+      setFlaskBenchPos(release.pos);
       return;
     }
     if (previous === "beaker") {
-      // Set down on the pan, it clicks onto the pan; anywhere else it rests
-      // where the student released it.
-      setBeakerBenchPos(releasePointFor("beaker", point));
+      setBeakerBenchPos(release.pos);
     }
-  }, [carried, stage, canWrite, pending, perform, setFlaskBenchPos, setBeakerBenchPos]);
+  }, [carried, stage, canWrite, pending, perform, setFlaskBenchPos, setBeakerBenchPos, setBuretteMounted]);
+
+  // ---- Pouring what the student holds ---------------------------------------
+  // A tipped vessel leaves a stream aimed at whatever it is pointed at. The
+  // volumes themselves are the domain's business; what the gesture produces
+  // here is the SAME one-shot action the panel button sends, fired when the
+  // student brings the vessel back upright — exactly how the stopcock records
+  // its pour when it is shut again. Overshooting stays possible because the
+  // action is still gated by the same availability rules the server enforces.
+  const pourTargets: PourTargets = useMemo(
+    () => ({
+      flask: flaskSlot.pos,
+      beaker: beakerBenchPos ?? { ...FIXED_SLOTS.beaker },
+      cylinder: { ...FIXED_SLOTS.cylinder },
+      volumetricFlask: { ...VOLUMETRIC_FLASK_SLOT },
+    }),
+    [flaskSlot.pos, beakerBenchPos],
+  );
+  const pouring = isPourTilt(heldPose);
+  const pourArmed = useRef(false);
+  const prevTilt = useRef(0);
+  useEffect(() => {
+    const nowPouring = isPourTilt({ yawRadians: 0, tiltRadians: carriedTilt });
+    const wasPouring = isPourTilt({ yawRadians: 0, tiltRadians: prevTilt.current });
+    prevTilt.current = carriedTilt;
+    if (nowPouring) {
+      // Tipping while holding arms the pour; nothing is sent until it is
+      // levelled off, so a wobble cannot fire a stray action.
+      if (carried) pourArmed.current = true;
+      return;
+    }
+    if (!wasPouring || !pourArmed.current) return;
+    pourArmed.current = false;
+    if (!carried || !stage) return;
+    // Read the live aim here, in an effect — not during render — so the pour
+    // resolves to whatever the student was actually pointing at.
+    const intent = pourIntent({
+      pose: { yawRadians: 0, tiltRadians: carriedTilt },
+      aimPoint: dropPointRef.current,
+      targets: pourTargets,
+    });
+    const action = pourActionFor(carried, intent.zone, { stage, canWrite, pending });
+    if (action) void perform(action);
+  }, [carriedTilt, carried, stage, canWrite, pending, perform, pourTargets]);
 
   if (!stage) {
     return (
@@ -560,6 +627,8 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     stirring,
     carriedKind: carried,
     carriedYawRadians: carriedRotation.yawRadians,
+    carriedTilt,
+    pouring,
     zoneState,
     physicsEnabled: interactive,
     moveEnabled: walkMode,
@@ -580,6 +649,36 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
       </SceneErrorBoundary>
     </div>
   );
+}
+
+type ActiveStage = NonNullable<ReturnType<typeof useActiveStage>>;
+
+/**
+ * What a completed pour MEANS, given what is being poured and into what.
+ *
+ * Only pours the domain already models as a single action are mapped: tipping
+ * the dissolved-KHP beaker into the flask is the transfer (or a rinse, if that
+ * is what is outstanding). Actions that need a RECORDED volume — measuring
+ * stock, pipetting the aliquot — deliberately stay with the recorder, because
+ * a student must read and enter those numbers rather than have the gesture
+ * invent them.
+ */
+function pourActionFor(
+  kind: HoldableKind,
+  zone: PourZone,
+  flags: { stage: ActiveStage; canWrite: boolean; pending: boolean },
+): { type: string; stageKey: string } | null {
+  const gate = { canWrite: flags.canWrite, pending: flags.pending };
+  if (kind === "beaker" && zone === "flask") {
+    if (transferAvailability(flags.stage, gate).available) {
+      return { type: "transfer_solution", stageKey: flags.stage.key };
+    }
+    if (rinseBeakerAvailability(flags.stage, gate).available) {
+      return { type: "rinse_beaker", stageKey: flags.stage.key };
+    }
+    return null;
+  }
+  return null;
 }
 
 function mapBenchSelection(key: string | null): PhysicalSelectionKey {

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useLabUi } from "../../lab-state-provider";
 import { Lab3DActions } from "../Lab3DActions";
 import { lookTargetLabel } from "../interactions/lookTarget";
-import { carryingLabel, primaryVerbFor } from "../interactions/carry";
+import { holdSpecFor, holdVerbFor } from "../interactions/carry";
 import { LAB_KEYBINDS, keybindFor } from "../simulation/keymap";
 import type { PhysicalSelectionKey } from "../simulation/apparatus-state";
 
@@ -65,8 +65,8 @@ export function ContextPrompt({ reagents }: { reagents: Array<{ key: string; lab
   } = useLabUi();
 
   const subject = selectionKeyFor({ selectedReagentKey, selectedApparatusKey, lookedAtKey });
-  const title = carried ? carryingLabel(carried) : labelFor(subject);
-  const verb = primaryVerbFor(subject, carried);
+  const title = carried ? holdSpecFor(carried).label : labelFor(subject);
+  const verb = holdVerbFor(subject, carried);
 
   if (!promptOpen) {
     if (subject === null && !carried) return null;
@@ -109,8 +109,14 @@ export function ContextPrompt({ reagents }: { reagents: Array<{ key: string; lab
           <span className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
             {LAB_KEYBINDS.filter((bind) =>
               carried
-                ? bind.command === "rotate" || bind.command === "confirm" || bind.command === "cancel"
-                : bind.command !== "rotate",
+                ? bind.command === "rotate" ||
+                  bind.command === "tilt" ||
+                  bind.command === "level" ||
+                  bind.command === "confirm" ||
+                  bind.command === "cancel"
+                : bind.command === "interact" ||
+                  bind.command === "focus" ||
+                  bind.command === "cancel",
             ).map((bind) => (
               <span key={bind.command} className="rounded border border-line px-1 py-0.5">
                 <span className="font-semibold text-foreground">{bind.key}</span> {bind.label}

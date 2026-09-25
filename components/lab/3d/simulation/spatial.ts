@@ -108,3 +108,46 @@ export function snapBeakerOnDrop(pos: BenchPoint): BenchPoint {
   if (balancePlacementValid(pos)) return { ...BALANCE_SLOT };
   return pos;
 }
+
+// ---------------------------------------------------------------------------
+// Where every piece of apparatus rests, and where the burette may be clamped.
+//
+// Carrying is physical (§4): an object leaves its resting slot, rides in the
+// student's hand, and returns to a slot when it is not being held. Because the
+// slots live here rather than in a component, the same coordinates position the
+// meshes and decide where a release lands — they can never drift apart.
+// ---------------------------------------------------------------------------
+
+/** Resting slots for apparatus that is not permanently installed. */
+export const BURETTE_CRADLE_SLOT: BenchPoint = { x: -3.35, z: 0.15 };
+export const VOLUMETRIC_FLASK_SLOT: BenchPoint = { x: -3.7, z: 1.3 };
+export const GLASS_ROD_SLOT: BenchPoint = { x: 1.0, z: 1.35 };
+export const STOPPER_SLOT: BenchPoint = { x: -3.15, z: 1.05 };
+export const STOCK_BOTTLE_SLOT: BenchPoint = { x: 2.4, z: 0.6 };
+export const WATER_BOTTLE_SLOT: BenchPoint = { x: 1.7, z: 0.6 };
+export const KHP_SLOT: BenchPoint = { x: -4.1, z: 0.55 };
+
+/**
+ * The clamp's mounting position: the point on the stand where a correct
+ * burette hangs vertically with its tip at `BURETTE_TIP`. A burette released
+ * within `CLAMP_TOLERANCE_UNITS` of it mounts; anywhere else it stays in hand
+ * or rests on the bench.
+ */
+export const CLAMP_SLOT: BenchPoint = { x: -2.0, z: -0.5 };
+export const CLAMP_TOLERANCE_UNITS = 0.55;
+
+/** Is this point close enough to the clamp for the burette to mount? */
+export function clampIsReachable(pos: BenchPoint): boolean {
+  return distance2D(pos, CLAMP_SLOT) <= CLAMP_TOLERANCE_UNITS;
+}
+
+/**
+ * Snap a dropped burette: near the clamp it mounts upright (the tip lands on
+ * `BURETTE_TIP`, which is what the liquid stream and the receiving zone expect);
+ * otherwise it goes back to its cradle. A burette cannot stand on the bench —
+ * a real one falls over — so an invalid release returns it to the cradle.
+ */
+export function snapBuretteOnDrop(pos: BenchPoint): { pos: BenchPoint; mounted: boolean } {
+  if (clampIsReachable(pos)) return { pos: { ...CLAMP_SLOT }, mounted: true };
+  return { pos: { ...BURETTE_CRADLE_SLOT }, mounted: false };
+}

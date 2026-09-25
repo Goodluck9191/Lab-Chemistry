@@ -1,13 +1,15 @@
 "use client";
 
 import { useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import {
   BURETTE_TIP,
   BURETTE_TIP_Y,
   FLASK_MOUTH_UNDER_BURETTE_Y,
 } from "./simulation/spatial";
+import { pourOriginPoint, type HoldPose } from "./interactions/hold";
+import { dropPointInFront } from "./interactions/carry";
 
 /**
  * Liquid visuals: burette column + meniscus, flask fill, falling stream.
@@ -219,6 +221,97 @@ export function LiquidStream3D({
           <mesh key={i}>
             <sphereGeometry args={[1, 10, 10]} />
             <meshBasicMaterial color="#60a5fa" transparent opacity={0.9} />
+          </mesh>
+        ))}
+      </group>
+    </group>
+  );
+}
+
+/**
+ * The stream leaving a vessel the student is holding.
+ *
+ * It starts where the glass actually is: the mouth position comes from the same
+ * `pourOriginPoint` the held mesh is drawn from, computed from the live camera
+ * — so tipping the beaker swings its spout and the falling liquid follows,
+ * rather than leaking from a fixed point in space. Droplets cycle mouth → aim,
+ * deterministically, and it disappears the instant the vessel comes back
+ * upright.
+ */
+export function HeldPourStream3D({
+  active,
+  pose,
+  colour = "#93c5fd",
+}: {
+  active: boolean;
+  /** The hand's pose: which way the vessel is tipped. */
+  pose: HoldPose;
+  colour?: string;
+}) {
+  const camera = useThree((state) => state.camera);
+  const group = useRef<THREE.Group>(null);
+  const thread = useRef<THREE.Mesh>(null);
+  const mouth = useRef(new THREE.Vector3());
+  const target = useRef(new THREE.Vector3());
+  const drops = useMemo(() => [0, 1, 2, 3, 4], []);
+
+  useFrame(({ clock }) => {
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    const origin = {
+      x: camera.position.x,
+      y: camera.position.y,
+      z: camera.position.z,
+    };
+    const point = pourOriginPoint({
+      origin,
+      forward: { x: forward.x, y: forward.y, z: forward.z },
+      pose,
+    });
+    mouth.current.set(point.x, point.y, point.z);
+    // The stream falls to whatever the crosshair is over, computed live from
+    // the camera rather than handed down — so pouring never re-renders React.
+    const drop = dropPointInFront({
+      origin,
+      direction: { x: forward.x, y: forward.y, z: forward.z },
+    });
+    target.current.set(drop.x, 0.04, drop.z);
+
+    if (thread.current) {
+      const mid = mouth.current.clone().add(target.current).multiplyScalar(0.5);
+      const length = mouth.current.distanceTo(target.current);
+      thread.current.position.copy(mid);
+      thread.current.scale.set(1, Math.max(0.001, length), 1);
+      thread.current.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        target.current.clone().sub(mouth.current).normalize(),
+      );
+    }
+
+    if (!group.current) return;
+    const t = clock.elapsedTime;
+    group.current.children.forEach((child, index) => {
+      const phase = ((t * 1.6 + index * 0.2) % 1 + 1) % 1;
+      child.position.set(
+        mouth.current.x + (target.current.x - mouth.current.x) * phase,
+        mouth.current.y + (target.current.y - mouth.current.y) * phase,
+        mouth.current.z + (target.current.z - mouth.current.z) * phase,
+      );
+      child.scale.setScalar(0.05);
+    });
+  });
+
+  if (!active) return null;
+  return (
+    <group>
+      <mesh ref={thread}>
+        <cylinderGeometry args={[0.02, 0.02, 1, 8]} />
+        <meshBasicMaterial color={colour} transparent opacity={0.75} />
+      </mesh>
+      <group ref={group}>
+        {drops.map((i) => (
+          <mesh key={i}>
+            <sphereGeometry args={[1, 8, 8]} />
+            <meshBasicMaterial color={colour} transparent opacity={0.9} />
           </mesh>
         ))}
       </group>
