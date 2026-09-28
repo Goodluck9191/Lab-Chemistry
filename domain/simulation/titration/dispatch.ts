@@ -48,6 +48,7 @@ import {
   preparationBlockersForTrial,
   projectPublicState,
   readBurette,
+  reconcileSessionPhases,
   recordObservation,
   reportMolarity,
   rinseBeaker,
@@ -177,6 +178,10 @@ export function dispatchTitrationAction(
       calculationCorrect: null,
     };
   }
+  // Heal a phase that contradicts the stage's own recorded preparation before
+  // any gate reads it, so a session that was rewound (or a snapshot taken mid-
+  // rewind) can still be finished rather than refusing every route forward.
+  reconcileSessionPhases(session);
   // Stage order is an experiment property, enforced for every caller (the
   // autosaving server action and any preview harness route through here): work
   // on a later stage is refused while an earlier stage is still incomplete.

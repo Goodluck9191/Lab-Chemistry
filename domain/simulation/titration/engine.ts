@@ -298,6 +298,18 @@ export function setupApparatus(
   if (!(initialReadingMl >= 0 && initialReadingMl <= cfg.burette.capacityMl)) {
     return fail("initial reading outside burette capacity", "invalid_sequence");
   }
+  // Filling the burette again over a prepared flask would silently rewind the
+  // stage: this function restarts the phase and clears the flask colour, but
+  // the recorded weighings and indicator survive, so the student is left with
+  // "everything is done" on screen and gates that refuse every route forward.
+  // A refill between trials is recorded as that trial's own initial reading
+  // (see `startTrialAction`), so nothing legitimate is refused here.
+  if (stageHasRecordedWork(stage)) {
+    return fail(
+      "the burette is already set up for this stage: record the next trial's initial reading instead of filling it again",
+      "invalid_sequence",
+    );
+  }
   stage.apparatusReady = true;
   stage.buretteInitialMl = roundTo(initialReadingMl, 2);
   stage.deliveredSoFarMl = 0;
@@ -306,6 +318,48 @@ export function setupApparatus(
   stage.flaskColour = null;
   stage.phase = "setup";
   return { ok: true };
+}
+
+/**
+ * Work already recorded that a second `setup_apparatus` would destroy.
+ *
+ * The line is drawn at the analyte and the indicator, not at "has been filled":
+ * a first fill, and correcting a mistyped initial reading on a stage where
+ * nothing has been prepared yet, both stay legal. What must never happen is a
+ * refill wiping a sample that is already weighed, dissolved and marked.
+ */
+export function stageHasRecordedWork(stage: StageSession): boolean {
+  return (
+    stage.analyteMassG !== null ||
+    stage.analyteVolumeMl !== null ||
+    stage.indicatorDrops !== null ||
+    stage.trials.length > 0
+  );
+}
+
+/**
+ * The phase the RECORDED facts imply.
+ *
+ * `phase` is a stored enum that can only be trusted while nothing rewinds it.
+ * Treating it as a cache of facts the stage already carries makes the session
+ * self-healing: a stage whose phase was knocked back to `setup` while its KHP
+ * sample or its indicator is still on record is lifted back to where its own
+ * evidence puts it, so the student is never locked out of the experiment by a
+ * state that contradicts itself. It never moves a phase backwards, and never
+ * touches `titrating` (an open trial) or `reported` (a judged trial).
+ */
+export function reconcileStagePhase(stage: StageSession): StageSession["phase"] {
+  if (stage.phase === "reported" || stage.phase === "titrating") return stage.phase;
+  if (stage.indicatorDrops !== null) return "indicator_added";
+  if (stage.analyteMassG !== null || stage.analyteVolumeMl !== null) return "analyte_ready";
+  return stage.phase;
+}
+
+/** Apply `reconcileStagePhase` to every stage of a session in place. */
+export function reconcileSessionPhases(session: TitrationSession): void {
+  for (const stage of Object.values(session.public.stages)) {
+    stage.phase = reconcileStagePhase(stage);
+  }
 }
 
 export function weighAnalyte(

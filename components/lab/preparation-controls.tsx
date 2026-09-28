@@ -13,7 +13,6 @@ import {
   beakerWeighAvailability,
   buretteSetupAvailability,
   conditionBuretteAvailability,
-  CONTROL_REASONS,
   dilutionAvailability,
   dissolveAvailability,
   indicatorAvailability,
@@ -302,11 +301,9 @@ export function BuretteSetupSection({ initialState }: { initialState: LabStateVi
   const titrantLabel = initialState.chemicalLabels[stage.titrantKey] ?? stage.titrantKey;
   const disabled = !canWrite || pending || stage.locked;
   const titrantSelected = selectedReagentKey === stage.titrantKey;
-  // `buretteSetupAvailability` is stage-agnostic (rinsing is always the same
-  // motion), so the stage-order lock is applied here at the call site.
-  const availability = stage.locked
-    ? { available: false, reason: CONTROL_REASONS.stageLocked }
-    : buretteSetupAvailability({ canWrite, pending });
+  // Filling is a one-time step: the rule itself applies the stage-order lock,
+  // and refuses a second fill over recorded work (which the engine refuses too).
+  const availability = buretteSetupAvailability(stage, { canWrite, pending });
 
   return (
     <div className="rounded-md border border-line px-3 py-3">

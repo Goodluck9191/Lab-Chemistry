@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { useActiveStage, useLabServer, useLabUi, useLabViewModel } from "../../lab-state-provider";
@@ -8,6 +9,10 @@ import { stopcockNotchFor } from "../simulation/stopcock";
 import { holdSpecFor } from "../interactions/carry";
 import { rotationLabel } from "../simulation/keymap";
 import { tiltLabel } from "../interactions/hold";
+import { dropCountLabel } from "../interactions/drops";
+
+/** How long a refusal stays on screen before the laboratory is quiet again. */
+const NOTICE_MS = 6000;
 
 /**
  * The minimal HUD (§5).
@@ -49,6 +54,9 @@ export function LabHud({
     carried,
     carriedRotation,
     carriedTilt,
+    dropsPoured,
+    physicalNotice,
+    setPhysicalNotice,
     promptOpen,
     setPromptOpen,
     activeStageKey,
@@ -56,6 +64,18 @@ export function LabHud({
   } = useLabUi();
 
   const valve = stopcockNotchFor(stopcockAngleForStage(activeStageKey));
+
+  // A refusal explains itself once and then gets out of the way: the pill is a
+  // message from the laboratory, not another permanent panel.
+  const noticeTimer = useRef<number | null>(null);
+  useEffect(() => {
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    if (physicalNotice === null) return;
+    noticeTimer.current = window.setTimeout(() => setPhysicalNotice(null), NOTICE_MS);
+    return () => {
+      if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    };
+  }, [physicalNotice, setPhysicalNotice]);
 
   return (
     <>
@@ -119,6 +139,20 @@ export function LabHud({
         </div>
       </div>
 
+      {/* Why the last gesture did nothing, in the gate's own words. It fades on
+          its own; the laboratory stays the dominant surface. */}
+      {physicalNotice !== null ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-28 z-30 flex justify-center px-3">
+          <p
+            role="status"
+            aria-label="Why that did nothing"
+            className="max-w-lg rounded-md bg-amber-50/95 px-2.5 py-1.5 text-[11px] text-amber-900 shadow backdrop-blur"
+          >
+            {physicalNotice}
+          </p>
+        </div>
+      ) : null}
+
       {/* Under the top edge: the attempt's trial record, straight from the
           server-computed concordance. */}
       <div className="pointer-events-none absolute inset-x-0 top-14 z-30 flex justify-center px-3 sm:top-16">
@@ -160,6 +194,14 @@ export function LabHud({
                 {tiltLabel({ yawRadians: carriedRotation.yawRadians, tiltRadians: carriedTilt })} ·{" "}
                 turned {rotationLabel(carriedRotation)}
               </span>
+              {/* Counting the drops out loud is what makes the gesture legible:
+                  the student can see when the dropper has given what the
+                  experiment asks for, and level it off to record them. */}
+              {carried === "indicator" && stage ? (
+                <span className="ms-2 font-medium text-foreground">
+                  {dropCountLabel(dropsPoured, stage.indicator.dropsRange)}
+                </span>
+              ) : null}
             </div>
           ) : null}
           {valve.flowMode !== null ? (

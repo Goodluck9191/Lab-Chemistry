@@ -107,11 +107,27 @@ export interface LabUiContextValue {
   tiltCarried: (direction: 1 | -1) => void;
   /** Set the tilt directly — what a drag on the held vessel reports. */
   setCarriedTilt: (radians: number) => void;
+  /**
+   * Drops released so far by the held dropper. UI-ONLY: it is what the gesture
+   * has poured, and it becomes an argument to `add_indicator` only when the
+   * student brings the dropper upright.
+   */
+  dropsPoured: number;
+  setDropsPoured: Dispatch<SetStateAction<number>>;
   /** The hand's full pose, for the pour rules and the mesh. */
   heldPose: HoldPose;
   /** Whether the burette is physically clamped and can be read or titrated. */
   buretteMounted: boolean;
   setBuretteMounted: (mounted: boolean) => void;
+  /**
+   * Why the last physical gesture did nothing, in the domain's own words, or
+   * null. A hand that turns a dead valve or pours into the wrong vessel
+   * otherwise looks like a broken laboratory; the gate already knows the
+   * reason, so the scene says it out loud and the student can act on it.
+   * UI-ONLY: it explains a refusal, it never records anything.
+   */
+  physicalNotice: string | null;
+  setPhysicalNotice: (notice: string | null) => void;
   /** Whether the contextual action card is open. */
   promptOpen: boolean;
   setPromptOpen: (open: boolean) => void;
@@ -196,7 +212,9 @@ export function LabStateProvider({
   const [carried, setCarriedState] = useState<HoldableKind | null>(null);
   const [carriedRotation, setCarriedRotation] = useState<HeldRotation>(NO_ROTATION);
   const [carriedTilt, setCarriedTiltState] = useState(0);
+  const [dropsPoured, setDropsPoured] = useState(0);
   const [buretteMounted, setBuretteMounted] = useState(false);
+  const [physicalNotice, setPhysicalNotice] = useState<string | null>(null);
   const [promptOpen, setPromptOpen] = useState(false);
   const [walkMode, setWalkMode] = useState(true);
   const [pointerLocked, setPointerLocked] = useState(false);
@@ -311,6 +329,8 @@ export function LabStateProvider({
     setCarriedState(kind);
     setCarriedRotation(NO_ROTATION);
     setCarriedTiltState(NEUTRAL_HOLD.tiltRadians);
+    // Drops belong to one pour: a new object in the hand starts with none.
+    setDropsPoured(0);
   }, []);
 
   // A valve that is open on one stage closes the previous one: the student has
@@ -345,9 +365,13 @@ export function LabStateProvider({
     carriedTilt,
     tiltCarried,
     setCarriedTilt,
+    dropsPoured,
+    setDropsPoured,
     heldPose: { yawRadians: carriedRotation.yawRadians, tiltRadians: carriedTilt },
     buretteMounted,
     setBuretteMounted,
+    physicalNotice,
+    setPhysicalNotice,
     promptOpen,
     setPromptOpen,
     walkMode,
