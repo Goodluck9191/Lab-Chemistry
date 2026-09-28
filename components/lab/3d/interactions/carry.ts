@@ -350,13 +350,33 @@ export function holdKindFor(key: string | null): HoldableKind | null {
   }
 }
 
-/** The verb E performs with the broader holdable model. */
+/**
+ * A reagent bottle the student selected stands for a holdable, when the
+ * laboratory actually keeps that reagent in something you can lift. The
+ * phenolphthalein dropper is the one that turns handling into chemistry: it is
+ * how the indicator is added, so it must be pickable rather than only
+ * clickable. Anything else on the shelf stays where it is.
+ */
+export function holdKindForReagent(
+  reagentKey: string | null,
+  indicatorKey: string | null,
+): HoldableKind | null {
+  if (reagentKey === null || indicatorKey === null) return null;
+  return reagentKey === indicatorKey ? "indicator" : null;
+}
+
+/**
+ * The verb E performs with the broader holdable model. `kind` lets the caller
+ * resolve a subject whose holdable depends on more than its selection key (a
+ * reagent bottle, whose identity is the selected chemical).
+ */
 export function holdVerbFor(
   key: string | null,
   held: HoldableKind | null,
+  kind: HoldableKind | null = holdKindFor(key),
 ): { label: string; picksUp: boolean } {
   if (held) return { label: "Set down", picksUp: false };
-  if (holdKindFor(key)) return { label: "Pick up", picksUp: true };
+  if (kind) return { label: "Pick up", picksUp: true };
   return { label: "Interact", picksUp: false };
 }
 

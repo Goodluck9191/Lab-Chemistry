@@ -343,6 +343,9 @@ export function ReagentBottle3D({
   fillFraction,
   selected,
   onSelect,
+  held = false,
+  heldYawRadians = 0,
+  heldTiltRadians = 0,
 }: {
   position: [number, number, number];
   label: string;
@@ -352,10 +355,44 @@ export function ReagentBottle3D({
   fillFraction: number;
   selected: boolean;
   onSelect: () => void;
+  /** In the student's hand: rides in front of the eye instead of the shelf. */
+  held?: boolean;
+  heldYawRadians?: number;
+  heldTiltRadians?: number;
 }) {
   const fillH = Math.max(0, Math.min(1, fillFraction)) * 0.62;
+  const root = useRef<THREE.Group>(null);
+  const camera = useThree((state) => state.camera);
+  const yaw = useRef(0);
+  const tilt = useRef(0);
+
+  // Hand and shelf share one mesh: a held dropper is the same object, moved by
+  // the same rules the vessels use, so "what is in your hand" and "what is on
+  // the shelf" can never be two different pictures.
+  useFrame((_, delta) => {
+    if (!root.current) return;
+    if (held) {
+      const forward = camera.getWorldDirection(new THREE.Vector3());
+      forward.y = 0;
+      forward.normalize();
+      root.current.position.set(
+        camera.position.x + forward.x * CARRY_FORWARD_UNITS,
+        camera.position.y - CARRY_DROP_UNITS,
+        camera.position.z + forward.z * CARRY_FORWARD_UNITS,
+      );
+    } else {
+      root.current.position.set(position[0], position[1], position[2]);
+    }
+    const targetYaw = held ? heldYawRadians : 0;
+    yaw.current += (targetYaw - yaw.current) * Math.min(1, delta * 10);
+    root.current.rotation.y = yaw.current;
+    const targetTilt = held ? heldTiltRadians : 0;
+    tilt.current += (targetTilt - tilt.current) * Math.min(1, delta * 10);
+    root.current.rotation.x = tilt.current;
+  });
+
   return (
-    <group position={position}>
+    <group ref={root} position={position}>
       <Selectable3DObject selected={selected} onSelect={onSelect} name={`Reagent bottle: ${label}`}>
         <mesh position={[0, 0.4, 0]} castShadow>
           <boxGeometry args={[0.5, 0.8, 0.5]} />
@@ -392,7 +429,10 @@ export function ReagentBottle3D({
             />
           </mesh>
         )}
-        <Html position={[0, 0.42, 0.26]} center distanceFactor={7}>
+        {/* The shelf label would fill the screen on a bottle held at arm's
+            length, so it is a shelf affordance only — the HUD names what the
+            student is holding. */}
+        {held ? null : <Html position={[0, 0.42, 0.26]} center distanceFactor={7}>
           <div
             aria-hidden="true"
             style={{
@@ -408,7 +448,7 @@ export function ReagentBottle3D({
             <div style={{ fontWeight: 700 }}>{label}</div>
             <div style={{ color: "#64748b" }}>{sublabel}</div>
           </div>
-        </Html>
+        </Html>}
       </Selectable3DObject>
     </group>
   );

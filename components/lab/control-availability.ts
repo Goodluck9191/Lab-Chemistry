@@ -67,6 +67,7 @@ export const CONTROL_REASONS = {
   portionAlreadyObtained: "The beaker already holds a portion of the working solution.",
   conditionNeedsPortion: "Obtain a portion of the working solution in a beaker before conditioning the burette.",
 
+  buretteAlreadySetUp: "The burette is already filled and clamped for this stage. Record the next trial's initial reading instead of filling it again.",
   buretteAlreadyClean: "The burette has already been rinsed with tap water.",
   conditionNeedsClean: "Rinse the burette with tap water before conditioning it.",
   buretteAlreadyConditioned: "The burette has had its three NaOH conditioning rinses.",
@@ -123,9 +124,39 @@ export function selectionAvailability(flags: LabControlFlags): ControlAvailabili
   return gate(flags, () => AVAILABLE);
 }
 
-/** Rinse, fill and clamp the burette (the engine's `setup_apparatus`). */
-export function buretteSetupAvailability(flags: LabControlFlags): ControlAvailability {
-  return gate(flags, () => AVAILABLE);
+/**
+ * Rinse, fill and clamp the burette (the engine's `setup_apparatus`).
+ *
+ * Filling is a ONE-TIME step per stage: doing it again over a prepared flask
+ * would restart the stage and strand it (the engine refuses exactly that), so
+ * the control explains itself instead of offering a destructive re-run. A
+ * refill between trials is recorded as that trial's initial reading, which is
+ * where the reading input belongs.
+ */
+export function buretteSetupAvailability(
+  stage: StageView,
+  flags: LabControlFlags,
+): ControlAvailability {
+  return gate(flags, () => {
+    const lock = stageLock(stage);
+    if (lock) return lock;
+    if (stageHasRecordedWork(stage)) return unavailable(CONTROL_REASONS.buretteAlreadySetUp);
+    return AVAILABLE;
+  });
+}
+
+/**
+ * Has the stage recorded work that a second fill would destroy? Mirrors
+ * `stageHasRecordedWork` in the engine, expressed through this view's public
+ * fields only (`tests/application/control-availability.test.ts` keeps the two
+ * in step by feeding the matching state to the real engine).
+ */
+function stageHasRecordedWork(stage: StageView): boolean {
+  const portionRecorded =
+    stage.portion.kind === "weighed_mass"
+      ? stage.portion.recordedMassG !== null
+      : stage.portion.recordedVolumeMl !== null;
+  return portionRecorded || stage.indicator.dropsAdded !== null || stage.hasCompletedTrial;
 }
 
 /**

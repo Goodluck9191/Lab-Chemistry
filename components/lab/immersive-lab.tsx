@@ -17,7 +17,7 @@ import { useActiveStage, useLabServer, useLabUi, useLabViewModel } from "./lab-s
 import { LabHud } from "./3d/ui/LabHud";
 import { ContextPrompt } from "./3d/ui/ContextPrompt";
 import { ReadingOverlay } from "./3d/ReadingOverlay";
-import { holdKindFor, canCarry, holdVerbFor } from "./3d/interactions/carry";
+import { holdKindFor, holdKindForReagent, canCarry, holdVerbFor } from "./3d/interactions/carry";
 import { commandForCode, isTextEntryTarget } from "./3d/simulation/keymap";
 import { cn } from "@/lib/utils";
 
@@ -67,7 +67,12 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
 
   /** What E acts on right now: what you selected, else what you are looking at. */
   const subjectKey = selectedReagentKey ? "reagent_bottle" : (selectedApparatusKey ?? lookedAtKey);
-  const verb = holdVerbFor(subjectKey, carried);
+  // Selecting a reagent names a chemical; whether it is something you can lift
+  // is a property of the laboratory, not of the selection key.
+  const subjectHoldKind = selectedReagentKey
+    ? holdKindForReagent(selectedReagentKey, markReagent)
+    : holdKindFor(subjectKey);
+  const verb = holdVerbFor(subjectKey, carried, subjectHoldKind);
   const carrying = canCarry({ canWrite, pending });
 
   /** The reagent list the prompt offers: enough to reach every reagent action. */
@@ -163,9 +168,8 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
           return;
         }
         if (verb.picksUp && carrying.available) {
-          const kind = holdKindFor(subjectKey);
-          if (kind) {
-            setCarried(kind);
+          if (subjectHoldKind) {
+            setCarried(subjectHoldKind);
             setPromptOpen(false);
             return;
           }
@@ -183,6 +187,7 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
     verb.picksUp,
     carrying.available,
     subjectKey,
+    subjectHoldKind,
     lookedAtKey,
     selectedApparatusKey,
     setSelectedApparatusKey,

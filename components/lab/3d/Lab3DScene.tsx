@@ -252,6 +252,14 @@ export function Lab3DSceneContent(props: Lab3DSceneProps) {
   const flaskHighlighted = selection === "conical_flask" || lookedAt === "conical_flask";
   const beakerHighlighted = selection === "beaker_250" || lookedAt === "beaker_250";
 
+  // The phenolphthalein dropper, when the student is carrying it. It is the one
+  // reagent the laboratory lets you lift, because the indicator is dropped in by
+  // hand: the shelf copy steps aside and this one rides in the hand.
+  const heldDropper =
+    carriedKind === "indicator"
+      ? (reagents.find((reagent) => reagent.kind === "dropper") ?? null)
+      : null;
+
   return (
     <>
       <LabLighting />
@@ -400,20 +408,38 @@ export function Lab3DSceneContent(props: Lab3DSceneProps) {
         onSelect={() => onSelectApparatus("waste_container")}
       />
 
-      {/* Reagent shelf */}
-      {reagents.map((reagent, index) => (
+      {/* Reagent shelf. The bottle in the student's hand is drawn in the hand
+          instead, so the same dropper is never on screen twice. */}
+      {reagents.map((reagent, index) =>
+        heldDropper && reagent.key === heldDropper.key ? null : (
+          <ReagentBottle3D
+            key={reagent.key}
+            position={[-0.2 + index * 1.05, SHELF_Y, SHELF_Z]}
+            label={reagent.label}
+            sublabel={reagent.sublabel}
+            colorHex={reagent.colorHex}
+            kind={reagent.kind}
+            fillFraction={reagent.fillFraction}
+            selected={selection === "reagent_bottle"}
+            onSelect={() => onSelectReagent(reagent.key)}
+          />
+        ),
+      )}
+      {heldDropper ? (
         <ReagentBottle3D
-          key={reagent.key}
-          position={[-0.2 + index * 1.05, SHELF_Y, SHELF_Z]}
-          label={reagent.label}
-          sublabel={reagent.sublabel}
-          colorHex={reagent.colorHex}
-          kind={reagent.kind}
-          fillFraction={reagent.fillFraction}
-          selected={selection === "reagent_bottle"}
-          onSelect={() => onSelectReagent(reagent.key)}
+          position={[0, 0, 0]}
+          held
+          heldYawRadians={carriedYawRadians}
+          heldTiltRadians={carriedTilt}
+          label={heldDropper.label}
+          sublabel={heldDropper.sublabel}
+          colorHex={heldDropper.colorHex}
+          kind={heldDropper.kind}
+          fillFraction={heldDropper.fillFraction}
+          selected
+          onSelect={() => onSelectReagent(heldDropper.key)}
         />
-      ))}
+      ) : null}
       {/* Burette tip marker for stream alignment debugging (invisible in normal use) */}
       <mesh position={[BURETTE_TIP.x, 0.02, BURETTE_TIP.z]} visible={false}>
         <sphereGeometry args={[0.05, 8, 8]} />

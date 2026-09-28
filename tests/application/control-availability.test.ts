@@ -308,7 +308,7 @@ describe("control availability gates", () => {
     run: (stage: StageView, flags: LabControlFlags) => ControlAvailability;
   }> = [
     { name: "selection", run: (stage, flags) => selectionAvailability(flags) },
-    { name: "burette setup", run: (stage, flags) => buretteSetupAvailability(flags) },
+    { name: "burette setup", run: buretteSetupAvailability },
     { name: "analyte portion", run: analytePortionAvailability },
     { name: "indicator", run: indicatorAvailability },
     { name: "start trial", run: startTrialAvailability },

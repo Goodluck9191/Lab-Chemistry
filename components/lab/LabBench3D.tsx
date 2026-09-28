@@ -12,11 +12,12 @@ import {
   type FlowMode,
 } from "./3d/simulation/flow";
 import { stopcockIsOpen, stopcockFlowModeFor, stopcockRateMlPerSecond } from "./3d/simulation/stopcock";
-import { holdReleaseFor, type HoldableKind } from "./3d/interactions/carry";
+import { holdReleaseFor } from "./3d/interactions/carry";
 import { isPourTilt } from "./3d/interactions/hold";
-import { pourIntent, type PourTargets, type PourZone } from "./3d/interactions/pour";
+import { pourIntent, type PourTargets } from "./3d/interactions/pour";
+import { dropsForPourMs } from "./3d/interactions/drops";
+import { pourActionFor, pourRefusalFor } from "./3d/interactions/pour-actions";
 import { titrationNeedsMount } from "./3d/interactions/mounting";
-import { rinseBeakerAvailability, transferAvailability } from "./control-availability";
 import {
   FLASK_TILE_SLOT,
   VOLUMETRIC_FLASK_SLOT,
@@ -153,7 +154,10 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     carriedRotation,
     carriedTilt,
     heldPose,
+    dropsPoured,
+    setDropsPoured,
     setBuretteMounted,
+    setPhysicalNotice,
     walkMode,
     stirring,
     setPointerLocked,
@@ -291,12 +295,34 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
   /** Turn the valve by hand. Shutting it records whatever passed. */
   const handleValveAngle = useCallback(
     (angleDeg: number) => {
-      if (!canUseStopcock) return;
+      if (!canUseStopcock) {
+        // A handle that turns nothing is indistinguishable from a broken
+        // laboratory: say what the valve is waiting for, in the gate's words.
+        setPhysicalNotice(stopcockRule?.reason ?? null);
+        return;
+      }
       const wasOpen = stopcockIsOpen(angleDeg);
       setStopcockAngleForStage(activeStageKey, angleDeg);
+      // Opening it is only half of a titration: the flask has to be under the
+      // tip, or the tap runs and nothing lands anywhere.
+      if (!wasOpen && stopcockIsOpen(angleDeg) && !mountCheck.available) {
+        setPhysicalNotice(mountCheck.reason);
+        return;
+      }
+      setPhysicalNotice(null);
       if (!wasOpen && accumulatedMl > 0) void confirmPour();
     },
-    [canUseStopcock, setStopcockAngleForStage, activeStageKey, accumulatedMl, confirmPour],
+    [
+      canUseStopcock,
+      stopcockRule,
+      mountCheck.available,
+      mountCheck.reason,
+      setStopcockAngleForStage,
+      activeStageKey,
+      accumulatedMl,
+      confirmPour,
+      setPhysicalNotice,
+    ],
   );
 
   // Auto-stop: the burette ran dry mid-pour — record what accumulated.
@@ -420,12 +446,30 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     }
     if (previous === "flask") {
       setFlaskBenchPos(release.pos);
+      // Setting the flask down short of the receiving spot leaves a running
+      // trial with nowhere to pour: the pour would simply never arrive, so the
+      // release says why instead of leaving the student to guess.
+      if (trialOpen && !flaskReceivingValid(release.pos)) {
+        setPhysicalNotice(mountCheck.reason);
+      }
       return;
     }
     if (previous === "beaker") {
       setBeakerBenchPos(release.pos);
     }
-  }, [carried, stage, canWrite, pending, perform, setFlaskBenchPos, setBeakerBenchPos, setBuretteMounted]);
+  }, [
+    carried,
+    stage,
+    canWrite,
+    pending,
+    perform,
+    setFlaskBenchPos,
+    setBeakerBenchPos,
+    setBuretteMounted,
+    trialOpen,
+    mountCheck.reason,
+    setPhysicalNotice,
+  ]);
 
   // ---- Pouring what the student holds ---------------------------------------
   // A tipped vessel leaves a stream aimed at whatever it is pointed at. The
@@ -446,6 +490,32 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
   const pouring = isPourTilt(heldPose);
   const pourArmed = useRef(false);
   const prevTilt = useRef(0);
+
+  // ---- Counting drops while the dropper is tipped --------------------------
+  // Adding the indicator is a physical act with a countable outcome: a tipped
+  // dropper releases a drop every `DROP_INTERVAL_MS`, and the count is what the
+  // domain action receives when the student brings it back upright. The count
+  // is clamped into the configured range, so a gesture can never invent a
+  // quantity the experiment does not call for.
+  const pourStartedAt = useRef<number | null>(null);
+  useEffect(() => {
+    if (carried !== "indicator" || !pouring) {
+      pourStartedAt.current = null;
+      return;
+    }
+    pourStartedAt.current = pourStartedAt.current ?? Date.now();
+    const id = window.setInterval(() => {
+      const since = pourStartedAt.current;
+      if (since === null) return;
+      const next = dropsForPourMs(Date.now() - since);
+      // Only a CHANGE reaches React: a dropper tipped for seconds must not
+      // re-render the laboratory five times a second.
+      setDropsPoured((current) => (next === current ? current : next));
+    }, 200);
+    return () => window.clearInterval(id);
+  }, [carried, pouring, setDropsPoured]);
+
+
   useEffect(() => {
     const nowPouring = isPourTilt({ yawRadians: 0, tiltRadians: carriedTilt });
     const wasPouring = isPourTilt({ yawRadians: 0, tiltRadians: prevTilt.current });
@@ -466,9 +536,34 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
       aimPoint: dropPointRef.current,
       targets: pourTargets,
     });
-    const action = pourActionFor(carried, intent.zone, { stage, canWrite, pending });
-    if (action) void perform(action);
-  }, [carriedTilt, carried, stage, canWrite, pending, perform, pourTargets]);
+    const action = pourActionFor(carried, intent.zone, {
+      stage,
+      canWrite,
+      pending,
+      dropsPoured,
+    });
+    if (action) {
+      void perform(action);
+      setPhysicalNotice(null);
+    } else {
+      // A pour the domain does not accept says so, in the domain's own words.
+      setPhysicalNotice(
+        pourRefusalFor(carried, intent.zone, { stage, canWrite, pending, dropsPoured }),
+      );
+    }
+    setDropsPoured(0);
+  }, [
+    carriedTilt,
+    carried,
+    stage,
+    canWrite,
+    pending,
+    perform,
+    pourTargets,
+    dropsPoured,
+    setDropsPoured,
+    setPhysicalNotice,
+  ]);
 
   if (!stage) {
     return (
@@ -649,36 +744,6 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
       </SceneErrorBoundary>
     </div>
   );
-}
-
-type ActiveStage = NonNullable<ReturnType<typeof useActiveStage>>;
-
-/**
- * What a completed pour MEANS, given what is being poured and into what.
- *
- * Only pours the domain already models as a single action are mapped: tipping
- * the dissolved-KHP beaker into the flask is the transfer (or a rinse, if that
- * is what is outstanding). Actions that need a RECORDED volume — measuring
- * stock, pipetting the aliquot — deliberately stay with the recorder, because
- * a student must read and enter those numbers rather than have the gesture
- * invent them.
- */
-function pourActionFor(
-  kind: HoldableKind,
-  zone: PourZone,
-  flags: { stage: ActiveStage; canWrite: boolean; pending: boolean },
-): { type: string; stageKey: string } | null {
-  const gate = { canWrite: flags.canWrite, pending: flags.pending };
-  if (kind === "beaker" && zone === "flask") {
-    if (transferAvailability(flags.stage, gate).available) {
-      return { type: "transfer_solution", stageKey: flags.stage.key };
-    }
-    if (rinseBeakerAvailability(flags.stage, gate).available) {
-      return { type: "rinse_beaker", stageKey: flags.stage.key };
-    }
-    return null;
-  }
-  return null;
 }
 
 function mapBenchSelection(key: string | null): PhysicalSelectionKey {

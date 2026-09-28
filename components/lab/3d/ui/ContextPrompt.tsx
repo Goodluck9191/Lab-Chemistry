@@ -1,11 +1,12 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { useLabUi } from "../../lab-state-provider";
+import { useActiveStage, useLabServer, useLabUi } from "../../lab-state-provider";
 import { Lab3DActions } from "../Lab3DActions";
 import { lookTargetLabel } from "../interactions/lookTarget";
-import { holdSpecFor, holdVerbFor } from "../interactions/carry";
+import { holdKindFor, holdKindForReagent, holdSpecFor, holdVerbFor } from "../interactions/carry";
 import { LAB_KEYBINDS, keybindFor } from "../simulation/keymap";
+import { interactionHintFor } from "./hint";
 import type { PhysicalSelectionKey } from "../simulation/apparatus-state";
 
 /**
@@ -63,10 +64,18 @@ export function ContextPrompt({ reagents }: { reagents: Array<{ key: string; lab
     promptOpen,
     setPromptOpen,
   } = useLabUi();
+  const stage = useActiveStage();
+  const { canWrite, pending } = useLabServer();
 
   const subject = selectionKeyFor({ selectedReagentKey, selectedApparatusKey, lookedAtKey });
   const title = carried ? holdSpecFor(carried).label : labelFor(subject);
-  const verb = holdVerbFor(subject, carried);
+  // A selected reagent bottle is the dropper only when the laboratory keeps
+  // that chemical somewhere liftable — the verb has to promise what E delivers.
+  const holdKind = selectedReagentKey
+    ? holdKindForReagent(selectedReagentKey, stage?.indicator.key ?? null)
+    : holdKindFor(subject);
+  const verb = holdVerbFor(subject, carried, holdKind);
+  const hint = interactionHintFor({ subject, carried, stage, flags: { canWrite, pending } });
 
   if (!promptOpen) {
     if (subject === null && !carried) return null;
@@ -92,6 +101,9 @@ export function ContextPrompt({ reagents }: { reagents: Array<{ key: string; lab
               {keybindFor("focus").label.toLowerCase()}
             </span>
           )}
+          {/* The laboratory's own answer about the thing you are looking at:
+              why the valve will not turn, or where the dropper is. */}
+          {hint !== null ? <span className="text-muted">{hint}</span> : null}
         </div>
       </div>
     );

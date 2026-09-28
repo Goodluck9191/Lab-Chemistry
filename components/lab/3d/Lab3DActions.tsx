@@ -152,7 +152,7 @@ function BuretteActions() {
   const rinse = rinseBuretteAvailability(stage, flags);
   const portion = naohPortionAvailability(stage, solution, flags);
   const condition = conditionBuretteAvailability(stage, flags);
-  const setup = buretteSetupAvailability(flags);
+  const setup = buretteSetupAvailability(stage, flags);
   const bubble = airBubbleAvailability(stage, flags);
   const start = startTrialAvailability(stage, flags);
   const observe = observationAvailability(stage, flags);

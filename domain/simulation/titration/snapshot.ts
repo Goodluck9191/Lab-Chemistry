@@ -20,6 +20,7 @@ import {
   emptyPreparation,
   emptyWorkingSolution,
   projectPublicState,
+  reconcileSessionPhases,
   type StageSession,
   type TitrationPublicState,
   type TitrationSession,
@@ -225,9 +226,15 @@ export function resumeSessionFromSnapshot(
     completedTrials: stored.completedTrials,
     observations: JSON.parse(JSON.stringify(stored.observations)) as TitrationSessionState["observations"],
   };
-  return {
+  const session: TitrationSession = {
     config,
     hidden: hiddenFromSecrets(secrets, config),
     public: publicState,
   };
+  // A resumed stage whose phase contradicts its own recorded preparation (a
+  // snapshot taken after a rewind) is lifted back to the phase its evidence
+  // implies, so the attempt can be finished instead of loading into a state
+  // where every route forward is refused. Pure derivation; nothing is invented.
+  reconcileSessionPhases(session);
+  return session;
 }
