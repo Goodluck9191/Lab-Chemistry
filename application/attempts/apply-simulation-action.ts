@@ -19,7 +19,9 @@ import {
 import { titrationConfigForExperiment } from "@/domain/experiments/catalog/titration-registry";
 import type { TitrationExperimentConfig } from "@/domain/simulation/titration/config";
 import {
+  applyPhysicalPatch,
   createTitrationSession,
+  setProcedureStep,
   toPublicJSON,
   type TitrationPublicState,
   type TitrationSession,
@@ -29,10 +31,12 @@ import { observeFlaskColour } from "@/domain/simulation/titration/endpoint";
 import {
   measurementRowsFor,
   preparationMeasurementRows,
+  readingAccuracyRows,
   solutionMeasurementRows,
   trialRowFor,
   trialRowNumber,
 } from "@/domain/simulation/titration/persistence";
+import { stageWorldObservation } from "@/domain/simulation/titration/world";
 import { parseTitrationEnvelope } from "@/domain/simulation/titration/protocol";
 import {
   resumeSessionFromSnapshot,
@@ -53,8 +57,6 @@ export interface TitrationActionResult {
   public: TitrationPublicState;
   /** Colour the student sees after this action (delivery/observation only). */
   colour: string | null;
-  /** Whether a reported molarity matched (never the expected value). */
-  calculationCorrect: boolean | null;
 }
 
 
@@ -157,6 +159,16 @@ export async function applyTitrationAction(input: unknown): Promise<TitrationAct
   }
 
   const { session, config } = loaded;
+  // Physical facts the student's own hands produced (valve angle, cylinder
+  // level) and where in the procedure they are reading ride along with the
+  // action, so the room reconstructs itself from ONE write path. Both are
+  // bounded by the schema and neither can touch chemistry.
+  if (envelope.physical && "stageKey" in envelope.action) {
+    applyPhysicalPatch(session, envelope.action.stageKey, envelope.physical);
+  }
+  if (envelope.procedureStep !== undefined) {
+    setProcedureStep(session, envelope.procedureStep);
+  }
   const outcome = dispatchTitrationAction(session, loaded.experimentId, envelope.action);
 
   // Observations for endpoint colour: derived server-side from hidden truth,
@@ -239,6 +251,35 @@ export async function applyTitrationAction(input: unknown): Promise<TitrationAct
     trialIds,
     solutionMeasurementRows(session.public.solution),
   );
+  // Instrument reading versus student record (§28): the world observation and
+  // the value the student wrote down, joined by their deviation. This is the
+  // measurement-accuracy signal for assessment; it never corrects a reading.
+  await appendMeasurementRows(
+    supabase,
+    loaded.attemptId,
+    trialIds,
+    Object.entries(session.public.stages).flatMap(([stageKey, stage]) => {
+      const truth = session.hidden.stages[stageKey];
+      if (!truth) return [];
+      return readingAccuracyRows({
+        stageKey,
+        preparation: stage.preparation,
+        world: stage.world,
+        observation: stageWorldObservation({
+          config,
+          stageKey,
+          stage,
+          hidden: truth,
+          beakerTareG: session.hidden.beakerTareG,
+        }),
+        buretteFillLevelMl: truth.buretteFillLevelMl,
+        trueSampleMassG: truth.trueAnalyteMassG,
+        beakerTareG: session.hidden.beakerTareG,
+        trials: stage.trials,
+        recordedCylinderMl: stage.analyteVolumeMl,
+      });
+    }),
+  );
   await syncObservationRows(supabase, loaded.attemptId, trialIds, observationRows);
 
   if (envelope.action.type === "report_molarity") {
@@ -252,6 +293,28 @@ export async function applyTitrationAction(input: unknown): Promise<TitrationAct
           studentValue: trial.reportedMolarityM,
           studentUnit: "mol/L",
           attemptNumber: trial.trialNumber,
+        },
+      ]);
+    }
+  }
+  if (envelope.action.type === "submit_calculation") {
+    // The student's own calculation values (KHP moles, the average titrant
+    // concentration, an uncertainty, the HCl result) are recorded here as an
+    // audit trail. They are NOT marked here: correctness is a question for
+    // server-side grading after submission, and their expected values never
+    // cross to the browser (§20, §22, §23). Upserted by (attempt, key), so a
+    // student correcting their own draft never duplicates a row.
+    const calculationKey = envelope.action.questionKey;
+    const stored = session.public.calculations.find(
+      (entry) => entry.questionKey === calculationKey,
+    );
+    if (stored) {
+      await syncCalculationRows(supabase, loaded.attemptId, [
+        {
+          questionKey: stored.questionKey,
+          studentValue: stored.value,
+          studentUnit: stored.unit,
+          attemptNumber: stored.trialNumber ?? 1,
         },
       ]);
     }

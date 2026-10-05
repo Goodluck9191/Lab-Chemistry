@@ -94,9 +94,14 @@ function workingSolution(): TitrationProtocolAction[] {
   ];
 }
 
-/** Clean, take the portion the burette is served from, then condition three times. */
+/**
+ * Clamp the burette on the stand, clean it, take the portion it is served from,
+ * then condition three times. The clamp comes first: a burette in its cradle
+ * cannot be filled.
+ */
 function burettePreparation(stageKey: string): TitrationProtocolAction[] {
   return [
+    { type: "mount_burette", stageKey, mounted: true },
     { type: "rinse_burette", stageKey },
     { type: "obtain_naoh_portion", stageKey },
     { type: "condition_burette", stageKey },
@@ -120,7 +125,12 @@ function prepared(): TitrationProtocolAction[] {
   return [
     ...filledBurette(),
     { type: "clear_air_bubble", stageKey: STAGE_A },
+    // Weighing by difference, physically: pan loaded, read, lifted, dosed, read.
+    { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true },
     { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: BEAKER_MASS_G },
+    { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: false },
+    { type: "add_khp", stageKey: STAGE_A },
+    { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true },
     { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: BEAKER_MASS_G + WEIGHED_MASS_G },
     { type: "dissolve_khp", stageKey: STAGE_A },
     { type: "transfer_solution", stageKey: STAGE_A },
@@ -305,7 +315,6 @@ export interface PreviewActionResult {
   code: string | null;
   message: string | null;
   colour: string | null;
-  calculationCorrect: boolean | null;
   /** Counts only ACCEPTED actions, exactly like the autosave revision does. */
   revision: number;
 }
@@ -327,7 +336,6 @@ export function buildPreviewState(
   let code: string | null = null;
   let message: string | null = null;
   let colour: string | null = null;
-  let calculationCorrect: boolean | null = null;
   let revision = PREVIEW_BASE_REVISION + prior.length;
 
   if (action) {
@@ -336,7 +344,6 @@ export function buildPreviewState(
     code = outcome.code;
     message = outcome.message;
     colour = outcome.colour;
-    calculationCorrect = outcome.calculationCorrect;
     if (accepted) revision += 1;
   }
 
@@ -356,7 +363,6 @@ export function buildPreviewState(
     code,
     message,
     colour,
-    calculationCorrect,
     revision,
   };
 }

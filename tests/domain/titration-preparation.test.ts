@@ -5,6 +5,7 @@ import {
   solutionMeasurementRows,
 } from "@/domain/simulation/titration/persistence";
 import {
+  addKhp,
   clearAirBubble,
   conditionBurette,
   discardToWaste,
@@ -13,6 +14,7 @@ import {
   measureStockVolume,
   mixWorkingSolution,
   obtainTitrantPortion,
+  placeBeakerOnBalance,
   placeFlask,
   preparationBlockersForTrial,
   rinseBeaker,
@@ -32,6 +34,24 @@ import {
   STAGE_A,
   STAGE_B,
 } from "../helpers/titration-fixtures";
+
+/**
+ * The full physical weighing-by-difference gesture on Stage A: load the pan,
+ * read the empty beaker, lift it off, tip the standard in, load the pan again
+ * and read the heavier mass.
+ */
+function weighByDifference(
+  session: ReturnType<typeof freshSession>,
+  emptyG = 52.34,
+  loadedG = 52.94,
+): void {
+  placeBeakerOnBalance(session, STAGE_A, true);
+  weighBeakerMass(session, STAGE_A, emptyG);
+  placeBeakerOnBalance(session, STAGE_A, false);
+  addKhp(session, STAGE_A);
+  placeBeakerOnBalance(session, STAGE_A, true);
+  weighBeakerMass(session, STAGE_A, loadedG);
+}
 
 /**
  * Part I at the engine level: measure the stock, dilute it, mix it, then take
@@ -138,8 +158,13 @@ describe("weighing by difference", () => {
   it("derives the sample mass from the two weighings", () => {
     const session = freshSession();
     setup(session);
+    // Stand the beaker on the pan: the instrument only reads what it carries.
+    expect(placeBeakerOnBalance(session, STAGE_A, true).ok).toBe(true);
     expect(weighBeakerMass(session, STAGE_A, 52.34).ok).toBe(true);
     expect(session.public.stages[STAGE_A].analyteMassG).toBeNull();
+    expect(placeBeakerOnBalance(session, STAGE_A, false).ok).toBe(true);
+    expect(addKhp(session, STAGE_A).ok).toBe(true);
+    expect(placeBeakerOnBalance(session, STAGE_A, true).ok).toBe(true);
     expect(weighBeakerMass(session, STAGE_A, 52.94).ok).toBe(true);
     expect(session.public.stages[STAGE_A].analyteMassG).toBe(0.6);
     expect(session.public.stages[STAGE_A].phase).toBe("analyte_ready");
@@ -148,7 +173,11 @@ describe("weighing by difference", () => {
   it("refuses a second weighing at or below the empty beaker", () => {
     const session = freshSession();
     setup(session);
+    placeBeakerOnBalance(session, STAGE_A, true);
     expect(weighBeakerMass(session, STAGE_A, 52.34).ok).toBe(true);
+    placeBeakerOnBalance(session, STAGE_A, false);
+    addKhp(session, STAGE_A);
+    placeBeakerOnBalance(session, STAGE_A, true);
     const outcome = weighBeakerMass(session, STAGE_A, 52.0);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.code).toBe("invalid_sequence");
@@ -158,9 +187,18 @@ describe("weighing by difference", () => {
   it("refuses a third weighing once the pair is complete", () => {
     const session = freshSession();
     setup(session);
-    weighBeakerMass(session, STAGE_A, 52.34);
-    weighBeakerMass(session, STAGE_A, 52.94);
+    weighByDifference(session);
     expect(weighBeakerMass(session, STAGE_A, 53.0).ok).toBe(false);
+  });
+
+  it("refuses adding the standard while the beaker sits on the pan", () => {
+    const session = freshSession();
+    setup(session);
+    placeBeakerOnBalance(session, STAGE_A, true);
+    weighBeakerMass(session, STAGE_A, 52.34);
+    const outcome = addKhp(session, STAGE_A);
+    expect(outcome.ok).toBe(false);
+    expect(session.public.stages[STAGE_A].preparation.khpAdded).toBe(false);
   });
 
   it("refuses weighing on a pipetted stage and before setup", () => {
@@ -174,8 +212,7 @@ describe("KHP solution handling", () => {
     const session = freshSession();
     setup(session);
     expect(dissolveKhp(session, STAGE_A).ok).toBe(false);
-    weighBeakerMass(session, STAGE_A, 52.34);
-    weighBeakerMass(session, STAGE_A, 52.94);
+    weighByDifference(session);
     expect(transferSolution(session, STAGE_A).ok).toBe(false);
     expect(dissolveKhp(session, STAGE_A).ok).toBe(true);
     expect(rinseBeaker(session, STAGE_A).ok).toBe(false);
@@ -215,8 +252,7 @@ describe("preparation measurement rows", () => {
   it("records both weighings plus the derived sample mass", () => {
     const session = freshSession();
     setup(session);
-    weighBeakerMass(session, STAGE_A, 52.34);
-    weighBeakerMass(session, STAGE_A, 52.94);
+    weighByDifference(session);
     const stage = session.public.stages[STAGE_A];
     const rows = preparationMeasurementRows(STAGE_A, stage.preparation, stage.analyteMassG);
     expect(rows.map((row) => row.label)).toEqual([

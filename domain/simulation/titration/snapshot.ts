@@ -16,6 +16,7 @@ import {
 } from "@/domain/simulation";
 import type { AttemptSecrets } from "@/domain/simulation/secrets";
 import type { TitrationExperimentConfig } from "./config";
+import { deriveHiddenState } from "./hidden";
 import {
   emptyPreparation,
   emptyWorkingSolution,
@@ -26,7 +27,8 @@ import {
   type TitrationSession,
   type TitrationSessionState,
 } from "./engine";
-import { measurementRowsFor, trialRowFor } from "./persistence";
+import { measurementRowsFor, readingAccuracyRows, trialRowFor } from "./persistence";
+import { emptyStageWorld } from "./world";
 import { titrationPublicStateSchema, type StoredStageSession } from "./schema";
 
 // ---------------------------------------------------------------------------
@@ -39,8 +41,14 @@ export function secretsForStorage(
 ): AttemptSecrets {
   const trueValues: Record<string, number> = {};
   const expectedEndpoint: Record<string, number> = {};
+  // The beaker tare is instrument truth, not an answer key: it is what the
+  // balance displays with the dry beaker on the pan, and the student still has
+  // to subtract their own two readings. Stored with the other hidden values so
+  // the world cannot be set from the browser.
+  trueValues.__beaker_tare_g = session.hidden.beakerTareG;
   for (const [stageKey, truth] of Object.entries(session.hidden.stages)) {
     trueValues[`${stageKey}__titrant_M`] = truth.trueTitrantMolarityM;
+    trueValues[`${stageKey}__burette_fill_ml`] = truth.buretteFillLevelMl;
     if (truth.trueAnalyteMassG !== null) {
       trueValues[`${stageKey}__analyte_mass_g`] = truth.trueAnalyteMassG;
     }
@@ -67,12 +75,33 @@ function requiredNumber(record: Record<string, number | string>, key: string): n
   return value;
 }
 
+/**
+ * Read a value that may predate this phase.
+ *
+ * The world facts added in this phase are derived deterministically from the
+ * seed, which the secrets already carry, so an attempt created earlier can
+ * simply re-derive them instead of failing to resume. Every pre-existing key
+ * stays REQUIRED: a missing concentration is still corruption.
+ */
+function derivedNumber(
+  record: Record<string, number | string>,
+  key: string,
+  derive: () => number,
+): number {
+  const value = record[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return derive();
+}
+
 /** Rebuild hidden engine state from the stored secrets. Fails loudly on corruption. */
 export function hiddenFromSecrets(
   secrets: AttemptSecrets,
   config: TitrationExperimentConfig,
 ): TitrationSession["hidden"] {
   if (!secrets.seed) throw new Error("attempt secrets are corrupt: missing seed");
+  // The fallback for keys an older attempt never stored. Deterministic in the
+  // seed, so re-deriving is the same act as computing it in the first place.
+  const derived = deriveHiddenState(config, secrets.seed, config.endpointBiasMl);
   const stages: TitrationSession["hidden"]["stages"] = {};
   for (const stage of config.stages) {
     stages[stage.key] = {
@@ -89,9 +118,22 @@ export function hiddenFromSecrets(
       analyteMoles: requiredNumber(secrets.trueValues, `${stage.key}__analyte_moles`),
       equivalenceMl: requiredNumber(secrets.expectedEndpoint, `${stage.key}__equivalence_ml`),
       observableMl: requiredNumber(secrets.expectedEndpoint, `${stage.key}__observable_ml`),
+      buretteFillLevelMl: derivedNumber(
+        secrets.trueValues,
+        `${stage.key}__burette_fill_ml`,
+        () => derived.stages[stage.key].buretteFillLevelMl,
+      ),
     };
   }
-  return { seed: secrets.seed, stages };
+  return {
+    seed: secrets.seed,
+    beakerTareG: derivedNumber(
+      secrets.trueValues,
+      "__beaker_tare_g",
+      () => derived.beakerTareG,
+    ),
+    stages,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +206,60 @@ export function snapshotFromSession(session: TitrationSession): SimulationState 
     });
   }
 
+  // Reading accuracy (§28): what each instrument SHOWED beside what the student
+  // recorded, with the deviation between them. The world row is server-validated;
+  // the recorded row is the student's, mistakes and all.
+  for (const [stageKey, stage] of Object.entries(publicState.stages)) {
+    const truth = session.hidden.stages[stageKey];
+    const accuracy = readingAccuracyRows({
+      stageKey,
+      preparation: stage.preparation,
+      world: stage.world,
+      observation: stage.observation,
+      buretteFillLevelMl: truth?.buretteFillLevelMl ?? 0,
+      trueSampleMassG: truth?.trueAnalyteMassG ?? null,
+      beakerTareG: session.hidden.beakerTareG,
+      trials: stage.trials,
+      recordedCylinderMl: stage.analyteVolumeMl,
+    });
+    for (const row of accuracy) {
+      base.measurements.push({
+        kind: row.kind,
+        label: row.label,
+        value: row.value,
+        unit: row.unit,
+        recordedAt: new Date().toISOString(),
+        serverValidated: row.serverValidated ?? false,
+        deviation: row.deviation,
+      });
+    }
+  }
+
+  // The Part I stock volume is recorded against the solution, not a stage.
+  if (publicState.solution.stockVolumeMl !== null) {
+    const firstStage = Object.values(publicState.stages)[0];
+    if (firstStage) {
+      base.measurements.push({
+        kind: "volume",
+        label: "part-i stock volume · instrument",
+        value: publicState.solution.stockVolumeMl,
+        unit: "mL",
+        recordedAt: new Date().toISOString(),
+        serverValidated: true,
+      });
+    }
+  }
+
+  // The student's own calculation values, mirrored into the audit array.
+  for (const calculation of publicState.calculations) {
+    base.calculations.push({
+      questionKey: calculation.questionKey,
+      studentValue: calculation.value,
+      unit: calculation.unit,
+      attemptNumber: calculation.trialNumber ?? 1,
+    });
+  }
+
   return {
     ...base,
     currentStep: activeStage,
@@ -186,6 +282,9 @@ function toSessionStage(stage: StoredStageSession): Omit<StageSession, "preparat
     buretteInitialMl: stage.buretteInitialMl,
     deliveredSoFarMl: stage.deliveredSoFarMl,
     flaskColour: stage.flaskColour,
+    // A snapshot written before the world layer existed resumes with a clean
+    // bench: the burette back in its cradle, the tap shut.
+    world: stage.world ?? emptyStageWorld(),
     trials: stage.trials,
     reportedMolaritiesM: stage.reportedMolaritiesM,
     openTrial: stage.openTrial,
@@ -225,6 +324,12 @@ export function resumeSessionFromSnapshot(
     errorEvents: JSON.parse(JSON.stringify(stored.errorEvents)) as TitrationSessionState["errorEvents"],
     completedTrials: stored.completedTrials,
     observations: JSON.parse(JSON.stringify(stored.observations)) as TitrationSessionState["observations"],
+    // Student-entered calculations are additive: an older snapshot resumes with
+    // none, which is exactly what a student who has not calculated anything has.
+    calculations: JSON.parse(
+      JSON.stringify(stored.calculations ?? []),
+    ) as TitrationSessionState["calculations"],
+    procedureStep: stored.procedureStep ?? 1,
   };
   const session: TitrationSession = {
     config,

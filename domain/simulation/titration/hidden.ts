@@ -26,10 +26,28 @@ export interface StageHiddenTruth {
   readonly equivalenceMl: number;
   /** Indicator bias + noise already applied. */
   readonly observableMl: number;
+  /**
+   * WHERE THE MENISCUS SITS when the burette is filled: the scale value the
+   * student finds when they first read the instrument (mL from the top). A real
+   * burette is filled to just above the zero mark, so this is a small positive
+   * offset drawn per stage.
+   *
+   * This is a WORLD fact, not an answer: it is what the glass shows, exactly as
+   * the drawn liquid level shows it. The student still has to read the scale
+   * and record the number themselves. It is hidden in the sense of "not
+   * client-settable" — the student's own typed reading can never move it.
+   */
+  readonly buretteFillLevelMl: number;
 }
 
 export interface AttemptHiddenState {
   readonly seed: string;
+  /**
+   * Mass of the dry 250 mL beaker as the balance finds it (g). A world fact the
+   * balance displays; the student reads it and records it, and the KHP sample
+   * mass stays the student's own subtraction.
+   */
+  readonly beakerTareG: number;
   readonly stages: Record<string, StageHiddenTruth>;
 }
 
@@ -46,6 +64,7 @@ function hiddenForStage(
   titrantMolarityM: number,
   unknownAnalyteMolarityM: number | null,
   analyteNoise: number,
+  buretteFillLevelMl: number,
 ): StageHiddenTruth {
   const stoich = {
     analyteCoefficient: stage.stoichiometry.analyteCoefficient,
@@ -84,6 +103,7 @@ function hiddenForStage(
     equivalenceMl: round2(equivalenceMl),
     // Observable endpoint: filled in by deriveHiddenState once bias draws exist.
     observableMl: round2(equivalenceMl),
+    buretteFillLevelMl: round2(buretteFillLevelMl),
   };
 }
 
@@ -111,13 +131,23 @@ export function deriveHiddenState(
     const analyteNoise = stageRng.range(-0.02, 0.02);
     const bias = stageRng.range(0, endpointBiasMl);
     const noise = stageRng.noise(0.02);
-    const base = hiddenForStage(stage, titrantMolarityM, unknownMolarityM, analyteNoise);
+    // A burette is filled to just above the zero mark; the exact resting level
+    // is the instrument's own business, drawn per stage.
+    const fillLevel = stageRng.range(0, 0.5);
+    const base = hiddenForStage(
+      stage,
+      titrantMolarityM,
+      unknownMolarityM,
+      analyteNoise,
+      fillLevel,
+    );
     stages[stage.key] = {
       ...base,
       observableMl: round2(Math.max(0, base.equivalenceMl + bias + noise)),
     };
   }
-  return { seed, stages };
+  const labRng = createSeededRandom(deriveSeed(seed, "hidden:lab"));
+  return { seed, beakerTareG: round2(labRng.range(48, 78)), stages };
 }
 
 /** Keys that must never appear in serialised public state (enforced by test). */

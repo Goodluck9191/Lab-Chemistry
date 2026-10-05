@@ -1,6 +1,7 @@
 import { exp02TitrationConfig } from "@/domain/experiments/catalog/exp-02-titration-config";
 import {
   addIndicator,
+  addKhp,
   addTitrant,
   clearAirBubble,
   completeTrial,
@@ -11,8 +12,10 @@ import {
   dissolveKhp,
   measureStockVolume,
   mixWorkingSolution,
+  mountBurette,
   obtainTitrantPortion,
   pipetteAnalyte,
+  placeBeakerOnBalance,
   placeFlask,
   readBurette,
   reportMolarity,
@@ -84,6 +87,8 @@ export function setup(session: TitrationSession, stageKey = STAGE_A, initialRead
   if (!session.public.stages[stageKey].preparation.beakerObtained) {
     expectOk(obtainTitrantPortion(session, stageKey));
   }
+  // The burette must hang on the stand before it can be filled (physical gate).
+  expectOk(mountBurette(session, stageKey, true));
   setupApparatus(session, stageKey, "naoh", initialReadingMl);
 }
 
@@ -185,7 +190,13 @@ export function provisionStageA(
   expectOk(conditionBurette(session, STAGE_A));
   setup(session);
   expectOk(clearAirBubble(session, STAGE_A));
+  // Weighing BY DIFFERENCE: stand the beaker on the pan, read it, lift it off,
+  // tip the standard in, then weigh the loaded beaker again.
+  expectOk(placeBeakerOnBalance(session, STAGE_A, true));
   expectOk(weighBeakerMass(session, STAGE_A, beakerMassG));
+  expectOk(placeBeakerOnBalance(session, STAGE_A, false));
+  expectOk(addKhp(session, STAGE_A));
+  expectOk(placeBeakerOnBalance(session, STAGE_A, true));
   expectOk(weighBeakerMass(session, STAGE_A, round2(beakerMassG + khpMassG)));
   expectOk(dissolveKhp(session, STAGE_A));
   expectOk(transferSolution(session, STAGE_A));

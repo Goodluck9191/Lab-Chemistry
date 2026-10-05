@@ -143,7 +143,6 @@ export function feedbackForOutcome(input: {
   action: LabActionInput;
   accepted: boolean;
   colour: string | null;
-  calculationCorrect: boolean | null;
   publicState: TitrationPublicState;
 }): ActionFeedback | null {
   if (!input.accepted) return null;
@@ -247,20 +246,15 @@ export function feedbackForOutcome(input: {
 
     case "report_molarity": {
       const trialNumber = numeric(action.trialNumber);
-      const submitted =
-        trialNumber === null
-          ? "Concentration submitted."
-          : `Concentration submitted for trial ${trialNumber}.`;
-      if (input.calculationCorrect === true) {
-        return { tone: "success", message: `${submitted} It agrees with the laboratory's check.` };
-      }
-      if (input.calculationCorrect === false) {
-        return {
-          tone: "warning",
-          message: `${submitted} It falls outside the accepted tolerance — recheck your arithmetic and the readings you used.`,
-        };
-      }
-      return { tone: "info", message: submitted };
+      // No verdict is worded here: before submission the student records their
+      // own value and the laboratory keeps its assessment to itself (§20, §23).
+      return {
+        tone: "info",
+        message:
+          trialNumber === null
+            ? "Concentration recorded."
+            : `Concentration recorded for trial ${trialNumber}.`,
+      };
     }
 
     case "measure_naoh_stock": {

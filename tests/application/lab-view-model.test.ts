@@ -9,6 +9,7 @@ import { publicTitrationConfigView } from "@/domain/simulation/titration/public-
 import { exp02TitrationConfig } from "@/domain/experiments/catalog/exp-02-titration-config";
 import {
   addIndicator,
+  addKhp,
   addTitrant,
   clearAirBubble,
   conditionBurette,
@@ -18,6 +19,7 @@ import {
   mixWorkingSolution,
   obtainTitrantPortion,
   observeEndpoint,
+  placeBeakerOnBalance,
   placeFlask,
   readBurette,
   reportMolarity,
@@ -86,8 +88,14 @@ describe("laboratory view model", () => {
     expect(nextKind()).toBe("clear_air_bubble");
     expect(clearAirBubble(session, STAGE_A).ok).toBe(true);
     expect(nextKind()).toBe("weigh_beaker");
+    // The pan is an instrument: stand the beaker on it before reading.
+    expect(placeBeakerOnBalance(session, STAGE_A, true).ok).toBe(true);
     expect(weighBeakerMass(session, STAGE_A, 52.34).ok).toBe(true);
     expect(viewFor(session).stages[0].nextAction?.title).toContain("plus KHP");
+    // Lift the beaker off, tip the standard in, load the pan and read again.
+    expect(placeBeakerOnBalance(session, STAGE_A, false).ok).toBe(true);
+    expect(addKhp(session, STAGE_A).ok).toBe(true);
+    expect(placeBeakerOnBalance(session, STAGE_A, true).ok).toBe(true);
     expect(weighBeakerMass(session, STAGE_A, 52.94).ok).toBe(true);
     expect(nextKind()).toBe("dissolve_khp");
     expect(dissolveKhp(session, STAGE_A).ok).toBe(true);

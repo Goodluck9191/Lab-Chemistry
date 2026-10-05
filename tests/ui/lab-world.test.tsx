@@ -141,7 +141,7 @@ describe("the immersive laboratory (jsdom)", () => {
     expect(screen.getAllByText(/stopcock: cracked open/i).length).toBeGreaterThan(0);
 
     // With the path open, the panel's delivery goes through the same protocol.
-    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getByRole("button", { name: /^accessible lab$/i }));
     await user.click(screen.getAllByRole("button", { name: /1\.00 mL/ })[0]);
 
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
@@ -149,6 +149,9 @@ describe("the immersive laboratory (jsdom)", () => {
       protocolVersion: SIMULATION_PROTOCOL_VERSION,
       attemptId: state.attemptId,
       baseRevision: 4,
+      // The student's place in the procedure rides along with every action so a
+      // resume opens on the step they were reading (§33).
+      procedureStep: 1,
       action: { type: "add_titrant", stageKey: STAGE_A, volumeMl: 1 },
     });
   });
@@ -237,7 +240,7 @@ describe("the immersive laboratory (jsdom)", () => {
 
     await openPrompt(user);
     await user.click(screen.getByRole("button", { name: "Flask" }));
-    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getByRole("button", { name: /^accessible lab$/i }));
     await user.click(screen.getByRole("button", { name: /^results$/i }));
 
     const text = document.body.textContent ?? "";
@@ -302,7 +305,7 @@ describe("the immersive laboratory (jsdom)", () => {
     );
 
     // And the panel's own actions are inert too.
-    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getByRole("button", { name: /^accessible lab$/i }));
     for (const button of screen.getAllByRole("button", { name: /fill burette|complete trial/i })) {
       expect(button).toHaveProperty("disabled", true);
     }

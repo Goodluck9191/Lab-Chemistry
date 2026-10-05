@@ -22,8 +22,9 @@ const WORKING_SOLUTION = [
   { type: "mix_naoh_solution", stageKey: STAGE_A },
 ] as const;
 
-/** Cleaning, the titrant portion and the three conditioning rinses. */
+/** Clamping the burette, cleaning, the titrant portion and three conditioning rinses. */
 const BURETTE_PREPARATION = [
+  { type: "mount_burette", stageKey: STAGE_A, mounted: true },
   { type: "rinse_burette", stageKey: STAGE_A },
   { type: "obtain_naoh_portion", stageKey: STAGE_A },
   { type: "condition_burette", stageKey: STAGE_A },
@@ -136,7 +137,7 @@ describe("titration action dispatch", () => {
     expect(session.public.stages[STAGE_A].deliveredSoFarMl).toBe(1);
   });
 
-  it("carries correctness for a reported concentration but never the expected value", () => {
+  it("records a reported concentration but never exposes an expected value or verdict", () => {
     const session = freshSession();
     provisionStageA(session);
     dispatchTitrationAction(session, EXPERIMENT_ID, {
@@ -167,9 +168,10 @@ describe("titration action dispatch", () => {
       studentMolarityM: 0.1,
     });
     expect(outcome.accepted).toBe(true);
-    expect(typeof outcome.calculationCorrect).toBe("boolean");
-    // The engine computes an expected value; the router must drop it.
+    // The engine computes an expected value; the router must drop it, and it
+    // must not hand back a correctness verdict either (§20, §23).
     expect(Object.keys(outcome)).not.toContain("expected");
+    expect(Object.keys(outcome)).not.toContain("calculationCorrect");
   });
 
   it("refuses an observation field the experiment does not declare", () => {

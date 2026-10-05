@@ -78,9 +78,49 @@ const stagePreparationSchema = z.object({
   beakerRinses: z.number().int().min(0).max(10),
   // Defaulted: a snapshot written before the portion step still resumes.
   beakerObtained: z.boolean().default(false),
+  // Physical placement facts. Defaulted for the same reason: an attempt saved
+  // before the balance became an instrument resumes with an empty bench.
+  beakerOnBalance: z.boolean().default(false),
+  khpAdded: z.boolean().default(false),
   flaskPlaced: z.boolean(),
   lastTrialDiscarded: z.boolean(),
   wasteDiscards: z.number().int().min(0),
+});
+
+/**
+ * Persisted physical placement facts. Optional with defaults so a document
+ * written before the world layer existed still resumes (its bench simply starts
+ * with the burette in its cradle, which is where a fresh attempt starts too).
+ */
+const stageWorldSchema = z.object({
+  buretteMounted: z.boolean().default(false),
+  stopcockAngleDeg: z.number().finite().min(0).max(90).default(0),
+  cylinderVolumeMl: z.number().finite().min(0).max(2000).default(0),
+  wasteMl: z.number().finite().min(0).max(100000).default(0),
+  spilledMl: z.number().finite().min(0).max(1000).default(0),
+});
+
+/**
+ * The INSTRUMENT OBSERVATIONS, derived on every projection and therefore never
+ * stored: they are recomputed from the session so they cannot go stale. The
+ * schema below exists only so the projection can be validated before it leaves
+ * the server.
+ */
+const worldObservationSchema = z.object({
+  buretteReadingMl: z.number().finite().min(0).max(200).nullable(),
+  balanceDisplayG: z.number().finite().min(0).max(100000).nullable(),
+  balanceHasBeaker: z.boolean(),
+  cylinderVolumeMl: z.number().finite().min(0).max(2000),
+  wasteMl: z.number().finite().min(0).max(100000),
+});
+
+/** A student's own submitted calculation value. Student work, never an answer. */
+const calculationSubmissionSchema = z.object({
+  stageKey: z.string().min(1).max(64),
+  questionKey: z.string().regex(/^[a-z0-9_]{3,64}$/),
+  value: z.number().finite(),
+  unit: z.string().min(1).max(24),
+  trialNumber: z.number().int().min(1).max(20).nullable(),
 });
 
 /**
@@ -106,8 +146,12 @@ const stageSessionSchema = z.object({
   // failing the whole document.
   deliveredSoFarMl: z.number().finite().min(0).default(0),
   flaskColour: flaskColourSchema.nullable().default(null),
+  /** Physical placement facts. Optional so older snapshots still resume. */
+  world: stageWorldSchema.optional(),
   /** Derived on every projection; ignored (and stripped) on resume. */
   concordance: concordanceSchema.optional(),
+  /** Derived on every projection; ignored (and stripped) on resume. */
+  observation: worldObservationSchema.optional(),
   /**
    * Procedure preparation. Optional so a snapshot written before it existed
    * still resumes — the resume path normalises a missing value to the empty
@@ -134,6 +178,10 @@ export const titrationSessionStateSchema = z.object({
   errorEvents: z.array(errorEventSchema).max(500),
   completedTrials: z.number().int().min(0),
   observations: z.array(observationSchema).max(40).default([]),
+  /** The student's own calculation values. Additive, so old snapshots resume. */
+  calculations: z.array(calculationSubmissionSchema).max(60).default([]),
+  /** Where in the procedure the student was reading. Additive. */
+  procedureStep: z.number().int().min(1).max(60).default(1),
 });
 
 /**
@@ -142,7 +190,14 @@ export const titrationSessionStateSchema = z.object({
  * compute it fails validation instead of reaching a student's screen.
  */
 export const titrationPublicStateSchema = titrationSessionStateSchema.extend({
-  stages: z.record(z.string(), stageSessionSchema.extend({ concordance: concordanceSchema })),
+  stages: z.record(
+    z.string(),
+    stageSessionSchema.extend({
+      concordance: concordanceSchema,
+      world: stageWorldSchema,
+      observation: worldObservationSchema,
+    }),
+  ),
   solution: workingSolutionSchema,
 });
 

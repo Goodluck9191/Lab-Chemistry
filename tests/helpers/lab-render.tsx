@@ -71,7 +71,6 @@ export function okOutcome(
     code: null,
     message: null,
     colour: null,
-    calculationCorrect: null,
     revision,
     publicState,
     ...extra,

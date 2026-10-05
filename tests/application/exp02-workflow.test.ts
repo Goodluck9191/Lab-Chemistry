@@ -74,9 +74,15 @@ describe("experiment 2 end-to-end workflow", () => {
     apply({ type: "condition_burette", stageKey: STAGE_A });
     apply({ type: "condition_burette", stageKey: STAGE_A });
     apply({ type: "condition_burette", stageKey: STAGE_A });
+    apply({ type: "mount_burette", stageKey: STAGE_A, mounted: true });
     apply({ type: "setup_apparatus", stageKey: STAGE_A, titrantKey: "naoh", initialReadingMl: 0 });
     apply({ type: "clear_air_bubble", stageKey: STAGE_A });
+    // Weighing by difference, physically: pan loaded, read, lifted, dosed, read.
+    apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
     apply({ type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 });
+    apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: false });
+    apply({ type: "add_khp", stageKey: STAGE_A });
+    apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
     apply({ type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.94 });
     expect(session.public.stages[STAGE_A].analyteMassG).toBe(0.6);
 
@@ -131,6 +137,7 @@ describe("experiment 2 end-to-end workflow", () => {
     apply({ type: "condition_burette", stageKey: STAGE_B });
     apply({ type: "condition_burette", stageKey: STAGE_B });
     apply({ type: "condition_burette", stageKey: STAGE_B });
+    apply({ type: "mount_burette", stageKey: STAGE_B, mounted: true });
     apply({ type: "setup_apparatus", stageKey: STAGE_B, titrantKey: "naoh", initialReadingMl: 0 });
     apply({ type: "pipette_analyte", stageKey: STAGE_B, observedVolumeMl: 25 });
     apply({ type: "clear_air_bubble", stageKey: STAGE_B });
@@ -202,7 +209,9 @@ describe("experiment 2 end-to-end workflow", () => {
     apply({ type: "condition_burette", stageKey: STAGE_A });
     apply({ type: "condition_burette", stageKey: STAGE_A });
     apply({ type: "condition_burette", stageKey: STAGE_A });
+    apply({ type: "mount_burette", stageKey: STAGE_A, mounted: true });
     apply({ type: "setup_apparatus", stageKey: STAGE_A, titrantKey: "naoh", initialReadingMl: 0 });
+    apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
     apply({ type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 });
 
     // Persist and resume exactly like the server does: secrets to the vault,

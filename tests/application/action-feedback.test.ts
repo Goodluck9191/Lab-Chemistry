@@ -76,13 +76,12 @@ function closedTrial(deliveredMl: number): TitrationSession {
 function outcomeFor(
   session: TitrationSession,
   action: { type: string } & Record<string, unknown>,
-  extras: { colour?: string | null; calculationCorrect?: boolean | null } = {},
+  extras: { colour?: string | null } = {},
 ): ActionFeedback | null {
   return feedbackForOutcome({
     action,
     accepted: true,
     colour: extras.colour ?? null,
-    calculationCorrect: extras.calculationCorrect ?? null,
     publicState: publicStateOf(session),
   });
 }
@@ -118,7 +117,6 @@ describe("action feedback after the server answered", () => {
         action: { type: "weigh_analyte", stageKey: STAGE_A, observedMassG: 0.6 },
         accepted: false,
         colour: null,
-        calculationCorrect: null,
         publicState: publicStateOf(session),
       }),
     ).toBeNull();
@@ -224,21 +222,15 @@ describe("action feedback after the server answered", () => {
     expect(overshot?.message).toMatch(/repeat the trial/i);
   });
 
-  it("reports the verdict on a submitted calculation without revealing the answer", () => {
+  it("acknowledges a submitted calculation without any verdict (§20, §23)", () => {
     const session = closedTrial(hiddenTruth(freshSession(), STAGE_A).observableMl);
     const action = { type: "report_molarity", stageKey: STAGE_A, trialNumber: 1, studentMolarityM: 0.1 };
 
-    const accepted = outcomeFor(session, action, { calculationCorrect: true });
-    expect(accepted?.tone).toBe("success");
-    expect(accepted?.message).toMatch(/agrees/i);
-
-    const outside = outcomeFor(session, action, { calculationCorrect: false });
-    expect(outside?.tone).toBe("warning");
-    expect(outside?.message).toMatch(/tolerance/i);
-
-    const unknown = outcomeFor(session, action, { calculationCorrect: null });
-    expect(unknown?.tone).toBe("info");
-    expect(unknown?.message).toContain("trial 1");
+    const feedback = outcomeFor(session, action);
+    expect(feedback?.tone).toBe("info");
+    expect(feedback?.message).toContain("trial 1");
+    // No oracle: the laboratory never tells the student whether they were right.
+    expect(feedback?.message).not.toMatch(/agrees|tolerance|correct/i);
   });
 
   it("compares the student's observation with what the flask showed", () => {
@@ -267,7 +259,6 @@ describe("action feedback after the server answered", () => {
         action: { type: "polish_the_bench" },
         accepted: true,
         colour: null,
-        calculationCorrect: null,
         publicState: publicStateOf(session),
       }),
     ).toBeNull();

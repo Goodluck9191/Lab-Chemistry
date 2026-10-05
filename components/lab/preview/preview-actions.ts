@@ -99,7 +99,6 @@ export async function replayPreviewLabAction(input: unknown): Promise<LabActionO
     code: result.code,
     message: result.message,
     colour: result.colour,
-    calculationCorrect: result.calculationCorrect,
     revision: result.revision,
     publicState: result.state.publicState,
   };

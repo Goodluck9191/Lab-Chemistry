@@ -49,14 +49,13 @@ function liveSend(session: TitrationSession) {
         code: outcome.code,
         message: outcome.message,
         colour: null,
-        calculationCorrect: null,
         revision,
         publicState: toPublicJSON(session),
       };
     }
     revision += 1;
     return okOutcome(toPublicJSON(session), revision, {
-      calculationCorrect: outcome.calculationCorrect ?? null,
+      colour: outcome.colour ?? null,
     });
   });
 }
@@ -90,8 +89,10 @@ describe("Experiment 2 from the 3D laboratory (jsdom)", () => {
     await user.click(screen.getByRole("button", { name: /add distilled water/i }));
     await user.click(screen.getByRole("button", { name: /stopper and swirl/i }));
 
-    // Burette: rinse, portion, condition, fill, bubble.
+    // Burette: clamp, rinse, portion, condition, fill, bubble.
     await user.click(screen.getByRole("button", { name: "Burette" }));
+    await user.click(screen.getByRole("button", { name: /clamp on the stand/i }));
+    await waitFor(() => expect(actionsOf(send)).toContain("mount_burette"));
     await user.click(screen.getByRole("button", { name: /rinse with tap water/i }));
     await user.click(screen.getByRole("button", { name: /obtain naoh portion/i }));
     await user.click(screen.getByRole("button", { name: /condition \(0\/3\)/i }));
@@ -102,11 +103,16 @@ describe("Experiment 2 from the 3D laboratory (jsdom)", () => {
     await waitFor(() => expect(actionsOf(send)).toContain("setup_apparatus"));
     await user.click(screen.getByRole("button", { name: /expel air bubble/i }));
 
-    // Balance + beaker: weighing by difference, dissolve, transfer, rinses.
+    // Balance + beaker: stand it on the pan, read it, lift it off, dose it, put
+    // it back and read it again — weighing by difference.
     await user.click(screen.getByRole("button", { name: "Balance" }));
+    await user.click(screen.getByRole("button", { name: /set the beaker on the balance/i }));
+    await waitFor(() => expect(actionsOf(send)).toContain("place_beaker_on_balance"));
     await user.type(screen.getByLabelText(/empty beaker/i), "52.34");
     await user.click(screen.getByRole("button", { name: /record weighing/i }));
     await waitFor(() => expect(actionsOf(send).filter((type) => type === "weigh_beaker")).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: /add khp/i }));
+    await waitFor(() => expect(actionsOf(send)).toContain("add_khp"));
     await user.type(screen.getByLabelText(/beaker \+ khp/i), "52.94");
     await user.click(screen.getByRole("button", { name: /record weighing/i }));
     await user.click(screen.getByRole("button", { name: /dissolve khp/i }));
@@ -130,6 +136,7 @@ describe("Experiment 2 from the 3D laboratory (jsdom)", () => {
       "measure_naoh_stock",
       "dilute_naoh_solution",
       "mix_naoh_solution",
+      "mount_burette",
       "rinse_burette",
       "obtain_naoh_portion",
       "condition_burette",
@@ -137,7 +144,11 @@ describe("Experiment 2 from the 3D laboratory (jsdom)", () => {
       "condition_burette",
       "setup_apparatus",
       "clear_air_bubble",
+      "place_beaker_on_balance",
       "weigh_beaker",
+      "place_beaker_on_balance",
+      "add_khp",
+      "place_beaker_on_balance",
       "weigh_beaker",
       "dissolve_khp",
       "transfer_solution",

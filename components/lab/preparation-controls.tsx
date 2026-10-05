@@ -325,6 +325,23 @@ export function BuretteSetupSection({ initialState }: { initialState: LabStateVi
         >
           {titrantSelected ? `Selected: ${titrantLabel}` : `Select ${titrantLabel}`}
         </Button>
+        {/* Physical precondition, on a button: a burette lying in its cradle
+            cannot be filled. The accessible surface performs the same physical
+            act the 3D hand does (§35). */}
+        <Button
+          size="sm"
+          variant={stage.burette.mounted ? "primary" : "secondary"}
+          disabled={disabled}
+          onClick={() =>
+            void perform({
+              type: "mount_burette",
+              stageKey: stage.key,
+              mounted: !stage.burette.mounted,
+            })
+          }
+        >
+          {stage.burette.mounted ? "Clamped on the stand" : "Clamp on the stand"}
+        </Button>
         {stage.burette.setup ? <Badge tone="success">Filled</Badge> : null}
       </div>
       <div className="mt-3 flex flex-wrap items-end gap-3">
@@ -700,7 +717,10 @@ export function AnalyteSection({ initialState }: { initialState: LabStateView })
             <Button
               size="sm"
               variant={balanceStep !== "none" ? "primary" : "secondary"}
-              onClick={() => setBalanceStep("empty")}
+              onClick={() => {
+                setBalanceStep("empty");
+                void perform({ type: "place_beaker_on_balance", stageKey: stage.key, onPan: true });
+              }}
               disabled={!availability.available || balanceStep !== "none"}
             >
               Place weighing bottle
@@ -713,10 +733,18 @@ export function AnalyteSection({ initialState }: { initialState: LabStateView })
             >
               Tare the balance
             </Button>
+            {/* Lifting the beaker off, dosing it and setting it back is the
+                physical gesture the 3D hand makes; on a button it is the same
+                three world facts in order. */}
             <Button
               size="sm"
               variant={balanceStep === "loaded" ? "primary" : "secondary"}
-              onClick={() => setBalanceStep("loaded")}
+              onClick={async () => {
+                setBalanceStep("loaded");
+                await perform({ type: "place_beaker_on_balance", stageKey: stage.key, onPan: false });
+                await perform({ type: "add_khp", stageKey: stage.key });
+                await perform({ type: "place_beaker_on_balance", stageKey: stage.key, onPan: true });
+              }}
               disabled={!availability.available || balanceStep !== "tared"}
             >
               {`Add ${analyteLabel}`}

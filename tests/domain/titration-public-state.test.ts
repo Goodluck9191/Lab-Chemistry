@@ -10,6 +10,7 @@ import {
   addIndicator,
   addTitrant,
   completeTrial,
+  mountBurette,
   observeEndpoint,
   readBurette,
   reportMolarity,
@@ -200,6 +201,7 @@ describe("titration public state (phase 4 additions)", () => {
 
   it("keeps both configured stages resumable and independent", () => {
     const session = createTitrationSession(exp02TitrationConfig, DEFAULT_SEED);
+    mountBurette(session, "stage-b-hcl-naoh", true);
     setupApparatus(session, "stage-b-hcl-naoh", "naoh", 0);
     expect(toPublicJSON(session).stages["stage-b-hcl-naoh"].apparatusReady).toBe(true);
     expect(toPublicJSON(session).stages[STAGE_A].apparatusReady).toBe(false);

@@ -193,6 +193,22 @@ function BuretteActions() {
         >
           Reading mode
         </Button>
+        {/* The clamp, on a button: the physical precondition for filling, for
+            anyone who cannot drag the burette onto the stand (§35). */}
+        <Button
+          size="sm"
+          variant={stage.burette.mounted ? "primary" : "secondary"}
+          disabled={!flags.canWrite || flags.pending}
+          onClick={() =>
+            void perform({
+              type: "mount_burette",
+              stageKey: stage.key,
+              mounted: !stage.burette.mounted,
+            })
+          }
+        >
+          {stage.burette.mounted ? "Clamped on the stand" : "Clamp on the stand"}
+        </Button>
       </div>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="secondary" disabled={!rinse.available} aria-describedby={describedBy(`${uid}-r`, rinse)} onClick={() => void perform({ type: "rinse_burette", stageKey: stage.key })}>
@@ -285,9 +301,28 @@ function WeighingActions() {
           size="sm"
           variant="secondary"
           disabled={!flags.canWrite || flags.pending}
-          onClick={() => setBeakerPos(panSlot())}
+          onClick={() => {
+            setBeakerPos(panSlot());
+            // The pan is an instrument: setting the beaker down on it is what
+            // the balance reads, so the physical fact is persisted too.
+            void perform({ type: "place_beaker_on_balance", stageKey: stage.key, onPan: true });
+          }}
         >
           Set the beaker on the balance
+        </Button>
+        {/* Weighing by difference needs the beaker OFF the pan while the standard
+            goes in: this is the lift, dose and replace, as one button. */}
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={!flags.canWrite || flags.pending || !firstDone}
+          onClick={async () => {
+            await perform({ type: "place_beaker_on_balance", stageKey: stage.key, onPan: false });
+            await perform({ type: "add_khp", stageKey: stage.key });
+            await perform({ type: "place_beaker_on_balance", stageKey: stage.key, onPan: true });
+          }}
+        >
+          Add KHP (off the pan)
         </Button>
         {/* Physical honesty: a balance reads what is on its pan, so say so
             rather than letting the student record a mass for a beaker that is
