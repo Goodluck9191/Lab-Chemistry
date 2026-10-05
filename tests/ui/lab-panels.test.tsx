@@ -16,6 +16,7 @@ import {
   addIndicator,
   addTitrant,
   completeTrial,
+  mountBurette,
   readBurette,
   reportMolarity,
   setupApparatus,
@@ -120,6 +121,7 @@ describe("laboratory data panels (jsdom)", () => {
 
   it("lists recorded measurements and describes flags by code only", () => {
     const session = freshSession();
+    mountBurette(session, STAGE_A, true);
     setupApparatus(session, STAGE_A, "naoh", 0);
     weighAnalyte(session, STAGE_A, 0.6);
     addIndicator(session, STAGE_A, 3);
@@ -189,12 +191,12 @@ describe("laboratory data panels (jsdom)", () => {
     expect(textarea).toHaveProperty("value", "Faint pink that persisted for a minute");
   });
 
-  it("submits a reported concentration and reports the server's verdict", async () => {
+  it("submits a reported concentration without any verdict (§20, §23)", async () => {
     const user = userEvent.setup();
     const session = scattershotStageASession("panel-calc-seed");
     const state = labStateViewFor(session);
     const send = vi.fn<(input: unknown) => Promise<LabActionOutcome>>(async () =>
-      okOutcome(publicStateOf(session), 5, { calculationCorrect: true }),
+      okOutcome(publicStateOf(session), 5),
     );
 
     renderLabPanels({ state, send, panels: allPanels(state) });
@@ -213,11 +215,11 @@ describe("laboratory data panels (jsdom)", () => {
         studentMolarityM: 0.1995,
       },
     });
-    // Feedback states the verdict without ever naming the expected value.
-    await waitFor(() =>
-      expect(screen.getAllByText(/agrees with the simulation/i).length).toBeGreaterThan(0),
-    );
-    expect(screen.queryByText(/0\.1995 is the expected/i)).toBeNull();
+    // No verdict is shown: the laboratory records the student's own value and
+    // keeps its assessment for submission.
+    expect(document.body.textContent ?? "").not.toMatch(/agrees with the simulation/i);
+    expect(document.body.textContent ?? "").not.toMatch(/outside the accepted tolerance/i);
+    expect(document.body.textContent ?? "").not.toMatch(/0\.1995 is the expected/i);
   });
 
   it("says plainly which calculation it cannot mark", () => {

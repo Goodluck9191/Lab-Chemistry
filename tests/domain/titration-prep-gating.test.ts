@@ -36,8 +36,14 @@ describe("dispatch preparation gates", () => {
       initialReadingMl: 0,
     } as const;
 
-    // Part I comes first: there is no titrant to fill the burette with yet.
+    // The burette must hang on the stand before anything can be poured into it.
     let outcome = dispatchTitrationAction(session, EXPERIMENT_ID, { ...setup });
+    expect(outcome).toMatchObject({ accepted: false, code: "preparation_incomplete" });
+    expect(outcome.message).toMatch(/clamp the burette/i);
+    apply(session, { type: "mount_burette", stageKey: STAGE_A, mounted: true });
+
+    // Part I comes first: there is no titrant to fill the burette with yet.
+    outcome = dispatchTitrationAction(session, EXPERIMENT_ID, { ...setup });
     expect(outcome).toMatchObject({ accepted: false, code: "preparation_incomplete" });
     expect(outcome.message).toMatch(/measure the .* stock solution/i);
 
@@ -94,6 +100,7 @@ describe("dispatch preparation gates", () => {
     apply(session, { type: "condition_burette", stageKey: STAGE_A });
     apply(session, { type: "condition_burette", stageKey: STAGE_A });
     apply(session, { type: "condition_burette", stageKey: STAGE_A });
+    apply(session, { type: "mount_burette", stageKey: STAGE_A, mounted: true });
     apply(session, {
       type: "setup_apparatus",
       stageKey: STAGE_A,
@@ -101,7 +108,11 @@ describe("dispatch preparation gates", () => {
       initialReadingMl: 0,
     });
     expect(attempt().message).toMatch(/empty beaker/i);
+    apply(session, { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
     apply(session, { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 });
+    apply(session, { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: false });
+    apply(session, { type: "add_khp", stageKey: STAGE_A });
+    apply(session, { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
     apply(session, { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.94 });
     expect(attempt().message).toMatch(/air bubble/i);
     apply(session, { type: "clear_air_bubble", stageKey: STAGE_A });

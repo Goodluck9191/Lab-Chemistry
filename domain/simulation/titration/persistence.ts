@@ -9,7 +9,9 @@
  */
 import type { TitrationExperimentConfig } from "./config";
 import type { StagePreparation, WorkingSolutionPreparation } from "./engine";
+import { trialDeliveredVolumeMl } from "./engine";
 import type { TrialRecord as EngineTrialRecord } from "./trials";
+import type { StageWorld, StageWorldObservation } from "./world";
 
 export type DbTrialStatus = "open" | "recorded" | "rejected";
 
@@ -31,6 +33,18 @@ export interface MeasurementRow {
   value: number;
   unit: string;
   trialRowNumber: number | null;
+  /**
+   * True when the row is an INSTRUMENT OBSERVATION — what the apparatus showed
+   * — rather than something the student wrote down. Set by the server, never by
+   * the client.
+   */
+  serverValidated?: boolean;
+  /**
+   * |student record − world observation| for a reading of an instrument. This is
+   * the measurement-accuracy signal (§28): it lets assessment see how well the
+   * student read the glass WITHOUT ever correcting their number.
+   */
+  deviation?: number;
 }
 
 export interface ObservationRow {
@@ -103,6 +117,114 @@ export function trialRowFor(
   };
 }
 
+/**
+ * Measurements behind weighing BY DIFFERENCE.
+ *
+ * Two pairs of rows per stage: what the balance displayed and what the student
+ * recorded, joined by the deviation between them. The sample mass is never
+ * stored as a world value on its own — deriving it is the student's work, and
+ * the engine's own by-difference figure is what grading compares against.
+ */
+export function readingAccuracyRows(args: {
+  stageKey: string;
+  preparation: StagePreparation;
+  world: StageWorld;
+  observation: StageWorldObservation;
+  /** Scale value the instrument showed when the burette was filled. */
+  buretteFillLevelMl: number;
+  /** Sample mass the attempt actually weighed out, g. */
+  trueSampleMassG: number | null;
+  beakerTareG: number;
+  trials: readonly EngineTrialRecord[];
+  /** Volume the student recorded in the measuring cylinder, mL. */
+  recordedCylinderMl: number | null;
+}): MeasurementRow[] {
+  const rows: MeasurementRow[] = [];
+  const pair = (
+    kind: MeasurementRow["kind"],
+    label: string,
+    world: number | null,
+    recorded: number | null,
+    unit: string,
+  ): void => {
+    if (world !== null) {
+      rows.push({
+        kind,
+        label: `${args.stageKey} ${label} · instrument`,
+        value: round2(world),
+        unit,
+        trialRowNumber: null,
+        serverValidated: true,
+      });
+    }
+    if (recorded !== null) {
+      rows.push({
+        kind,
+        label: `${args.stageKey} ${label} · recorded`,
+        value: round2(recorded),
+        unit,
+        trialRowNumber: null,
+        serverValidated: false,
+        deviation: world === null ? undefined : Math.abs(round2(recorded - world)),
+      });
+    }
+  };
+
+  // The balance, by difference.
+  const emptyWorld = args.observation.balanceHasBeaker ? args.beakerTareG : null;
+  const loadedWorld =
+    args.trueSampleMassG === null ? null : args.beakerTareG + args.trueSampleMassG;
+  pair("mass", "empty beaker", emptyWorld, args.preparation.beakerMassG, "g");
+  pair("mass", "beaker plus standard", loadedWorld, args.preparation.beakerPlusKhpMassG, "g");
+
+  // The burette: the meniscus when it was filled, then each trial's final read.
+  if (args.preparation.beakerObtained || args.buretteFillLevelMl > 0) {
+    pair("titration_reading", "initial burette reading", args.buretteFillLevelMl, null, "mL");
+  }
+  for (const trial of args.trials) {
+    const worldLevel =
+      trial.finalReadingMl === null
+        ? null
+        : round2(args.buretteFillLevelMl + trialDeliveredVolumeMl(trial));
+    if (worldLevel !== null || trial.finalReadingMl !== null) {
+      rows.push({
+        kind: "titration_reading",
+        label: `${args.stageKey} trial ${trial.trialNumber} final reading · instrument`,
+        value: worldLevel ?? 0,
+        unit: "mL",
+        trialRowNumber: null,
+        serverValidated: true,
+      });
+      if (trial.finalReadingMl !== null) {
+        rows.push({
+          kind: "titration_reading",
+          label: `${args.stageKey} trial ${trial.trialNumber} final reading · recorded`,
+          value: round2(trial.finalReadingMl),
+          unit: "mL",
+          trialRowNumber: null,
+          serverValidated: false,
+          deviation:
+            worldLevel === null ? undefined : Math.abs(round2(trial.finalReadingMl - worldLevel)),
+        });
+      }
+    }
+  }
+
+  // The measuring cylinder, where the configuration uses one.
+  pair(
+    "volume",
+    "measuring cylinder",
+    args.world.cylinderVolumeMl > 0 ? args.world.cylinderVolumeMl : null,
+    args.recordedCylinderMl,
+    "mL",
+  );
+  return rows;
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 export function measurementRowsFor(
   config: TitrationExperimentConfig,
   trial: EngineTrialRecord,
@@ -150,10 +272,11 @@ export function solutionMeasurementRows(solution: WorkingSolutionPreparation): M
   return [
     {
       kind: "volume",
-      label: `part-i ${solution.stockVolumeMl.toFixed(2)} mL stock measured for the working solution`,
+      label: "part-i stock volume recorded for the working solution",
       value: solution.stockVolumeMl,
       unit: "mL",
       trialRowNumber: null,
+      serverValidated: false,
     },
   ];
 }

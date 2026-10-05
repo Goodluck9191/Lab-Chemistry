@@ -40,9 +40,14 @@ function prepareStageA(session: ReturnType<typeof createTitrationSession>, apply
   apply({ type: "condition_burette", stageKey: STAGE_A });
   apply({ type: "condition_burette", stageKey: STAGE_A });
   apply({ type: "condition_burette", stageKey: STAGE_A });
+  apply({ type: "mount_burette", stageKey: STAGE_A, mounted: true });
   apply({ type: "setup_apparatus", stageKey: STAGE_A, titrantKey: "naoh", initialReadingMl: 0 });
   apply({ type: "clear_air_bubble", stageKey: STAGE_A });
+  apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
   apply({ type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 });
+  apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: false });
+  apply({ type: "add_khp", stageKey: STAGE_A });
+  apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
   apply({ type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.94 });
   apply({ type: "dissolve_khp", stageKey: STAGE_A });
   apply({ type: "transfer_solution", stageKey: STAGE_A });
@@ -200,6 +205,7 @@ describe("experiment 2 error scenarios and completion", () => {
     apply({ type: "condition_burette", stageKey: STAGE_B });
     apply({ type: "condition_burette", stageKey: STAGE_B });
     apply({ type: "condition_burette", stageKey: STAGE_B });
+    apply({ type: "mount_burette", stageKey: STAGE_B, mounted: true });
     apply({ type: "setup_apparatus", stageKey: STAGE_B, titrantKey: "naoh", initialReadingMl: 0 });
     apply({ type: "pipette_analyte", stageKey: STAGE_B, observedVolumeMl: 25 });
     apply({ type: "clear_air_bubble", stageKey: STAGE_B });
@@ -226,9 +232,11 @@ describe("experiment 2 error scenarios and completion", () => {
       trialNumber: 1,
       studentMolarityM: Math.round(expected * 1_000_000) / 1_000_000,
     });
-    expect(outcome.calculationCorrect).toBe(true);
-    // The grading verdict is a boolean: no expected value crosses to the client.
-    expect("expected" in (outcome as unknown as Record<string, unknown>)).toBe(false);
+    // No verdict and no expected value crosses to the client: correctness is a
+    // question for server-side grading after submission (§20, §23).
+    expect(Object.keys(outcome)).not.toContain("expected");
+    expect(Object.keys(outcome)).not.toContain("calculationCorrect");
+    expect(session.public.stages[STAGE_B].trials[0].reportedMolarityM).not.toBeNull();
   });
 
   it("walks the conceptual phases without duplicating state logic", () => {
@@ -249,9 +257,14 @@ describe("experiment 2 error scenarios and completion", () => {
     apply({ type: "condition_burette", stageKey: STAGE_A });
     apply({ type: "condition_burette", stageKey: STAGE_A });
     apply({ type: "condition_burette", stageKey: STAGE_A });
+    apply({ type: "mount_burette", stageKey: STAGE_A, mounted: true });
     apply({ type: "setup_apparatus", stageKey: STAGE_A, titrantKey: "naoh", initialReadingMl: 0 });
     apply({ type: "clear_air_bubble", stageKey: STAGE_A });
+    apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
     apply({ type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 });
+    apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: false });
+    apply({ type: "add_khp", stageKey: STAGE_A });
+    apply({ type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true });
     apply({ type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.94 });
     apply({ type: "dissolve_khp", stageKey: STAGE_A });
     apply({ type: "transfer_solution", stageKey: STAGE_A });

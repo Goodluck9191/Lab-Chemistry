@@ -5,6 +5,7 @@ import {
   addTitrant,
   completeTrial,
   createTitrationSession,
+  mountBurette,
   readBurette,
   reportMolarity,
   setupApparatus,
@@ -25,6 +26,7 @@ const STAGE_B = "stage-b-hcl-naoh";
 
 function workedSession() {
   const session = createTitrationSession(exp02TitrationConfig, "snapshot-seed");
+  mountBurette(session, STAGE_A, true);
   setupApparatus(session, STAGE_A, "naoh", 0);
   weighAnalyte(session, STAGE_A, 0.6);
   addIndicator(session, STAGE_A, 3);
@@ -117,6 +119,7 @@ describe("snapshot round-trip (autosave/resume)", () => {
 
   it("maps discarded overshoots to rejected rows with a reason", () => {
     const session = createTitrationSession(exp02TitrationConfig, "overshoot-rows");
+    mountBurette(session, STAGE_A, true);
     setupApparatus(session, STAGE_A, "naoh", 0);
     weighAnalyte(session, STAGE_A, 0.6);
     addIndicator(session, STAGE_A, 3);

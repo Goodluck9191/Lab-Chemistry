@@ -28,10 +28,16 @@
  * Correctness is recomputed server-side at grade time from hidden state, so the
  * answer never crosses to the browser.
  */
-import { declaredObservationFieldsFor } from "@/domain/experiments/catalog/catalog-registry";
+import {
+  academicCalculationKeysFor,
+  declaredObservationFieldsFor,
+  trialMolarityKey,
+  trialNumberInMolarityKey,
+} from "@/domain/experiments/catalog/catalog-registry";
 import type { TitrationProtocolAction } from "./protocol";
 import {
   addIndicator,
+  addKhp,
   addTitrant,
   clearAirBubble,
   completeTrial,
@@ -41,10 +47,14 @@ import {
   dissolveKhp,
   measureStockVolume,
   mixWorkingSolution,
+  mountBurette,
   obtainTitrantPortion,
   observeEndpoint,
   pipetteAnalyte,
+  placeBeakerOnBalance,
   placeFlask,
+  recordCylinderVolume,
+  setStopcockAngle,
   preparationBlockersForTrial,
   projectPublicState,
   readBurette,
@@ -55,7 +65,9 @@ import {
   rinseBurette,
   setupApparatus,
   solutionPreparationBlockers,
+  spillTitrant,
   startTrialAction,
+  submitCalculation,
   transferSolution,
   weighAnalyte,
   weighBeakerMass,
@@ -72,8 +84,6 @@ export interface TitrationDispatchOutcome {
   message: string | null;
   /** Colour the student sees after a delivery/observation, else null. */
   colour: string | null;
-  /** Whether a reported molarity matched — NEVER the expected value. */
-  calculationCorrect: boolean | null;
 }
 
 function rejected(result: ActionResult): TitrationDispatchOutcome {
@@ -83,7 +93,6 @@ function rejected(result: ActionResult): TitrationDispatchOutcome {
     message:
       "error" in result && typeof result.error === "string" ? result.error : "Action rejected",
     colour: null,
-    calculationCorrect: null,
   };
 }
 
@@ -95,7 +104,6 @@ function acceptedOutcome(
     code: null,
     message: null,
     colour: null,
-    calculationCorrect: null,
     ...extra,
   };
 }
@@ -107,19 +115,28 @@ function preparationRefusal(message: string): TitrationDispatchOutcome {
     code: "preparation_incomplete",
     message,
     colour: null,
-    calculationCorrect: null,
   };
 }
 
 /**
- * Procedure gates for filling and starting trials. Returns a refusal, or null
- * when the action may proceed to the engine.
+ * Procedure and physical gates for filling, weighing and starting trials.
+ * Returns a refusal, or null when the action may proceed to the engine.
+ *
+ * These live here rather than in the engine functions because they are
+ * properties of the LABORATORY (where the apparatus is, what the pan is
+ * carrying), not of the titration chemistry the engine models.
  */
 function preparationGateFor(
   session: TitrationSession,
   action: TitrationProtocolAction,
 ): TitrationDispatchOutcome | null {
   if (action.type === "setup_apparatus") {
+    // A burette in its cradle cannot be filled: the clamp comes first.
+    if (!session.public.stages[action.stageKey].world.buretteMounted) {
+      return preparationRefusal(
+        "Clamp the burette on the stand before filling it.",
+      );
+    }
     // Part I first: the burette is filled from the prepared working solution.
     const solutionBlockers = solutionPreparationBlockers(session.config, session.public.solution);
     if (solutionBlockers.length > 0) return preparationRefusal(solutionBlockers[0]);
@@ -138,6 +155,16 @@ function preparationGateFor(
       );
     }
     return null;
+  }
+  if (action.type === "weigh_beaker") {
+    // The pan is an instrument: with nothing on it there is no reading to
+    // record, and the by-difference method needs the student to load the pan
+    // themselves.
+    if (!session.public.stages[action.stageKey].preparation.beakerOnBalance) {
+      return preparationRefusal(
+        "Stand the beaker on the balance pan before reading its mass.",
+      );
+    }
   }
   if (action.type === "start_trial") {
     const stage = session.public.stages[action.stageKey];
@@ -175,7 +202,6 @@ export function dispatchTitrationAction(
       code: "unknown_stage",
       message: `This attempt has no stage named ${action.stageKey}`,
       colour: null,
-      calculationCorrect: null,
     };
   }
   // Heal a phase that contradicts the stage's own recorded preparation before
@@ -197,7 +223,6 @@ export function dispatchTitrationAction(
         `Stage ${stageStatus.letter} (${stageStatus.title}) is locked. ` +
         `Complete Stage ${workflow.stages.find((s) => s.key === stageStatus.lockedByKey)?.letter ?? ""} (${stageStatus.lockedByTitle ?? "the earlier stage"}) first.`,
       colour: null,
-      calculationCorrect: null,
     };
   }
   // Preparation procedure (Experiment 2, Part 2): a burette is filled only
@@ -297,10 +322,77 @@ export function dispatchTitrationAction(
     }
     case "report_molarity": {
       const result = reportMolarity(session, action.stageKey, action.trialNumber, action.studentMolarityM);
-      // `expected` is stripped here: it must never cross to the browser.
-      return result.ok
-        ? acceptedOutcome({ calculationCorrect: result.correct ?? null })
-        : rejected(result);
+      // `expected` is stripped here (it never crosses to the browser), and the
+      // correctness verdict is deliberately NOT returned either: before
+      // submission a student is entitled to a record of their own number, not
+      // to an oracle that lets them iterate towards the answer (§20, §23).
+      // There is no field for it at all.
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "submit_calculation": {
+      // Which calculations exist is a property of the EXPERIMENT, so it is
+      // enforced here: a prompt the procedure does not name can never be stored.
+      const recordedTrials = Object.values(session.public.stages).flatMap((stage) =>
+        stage.trials
+          .filter((trial) => trial.status === "recorded")
+          .map((trial) => ({ stageKey: trial.stageKey, trialNumber: trial.trialNumber })),
+      );
+      const allowed = new Set(
+        academicCalculationKeysFor(experimentId, session.config.stages, recordedTrials),
+      );
+      if (!allowed.has(action.questionKey)) {
+        return {
+          accepted: false,
+          code: "undeclared_calculation",
+          message: `This experiment has no calculation named ${action.questionKey}`,
+          colour: null,
+        };
+      }
+      // A per-trial molarity is not just a stored value: the concordance rule is
+      // judged on it, so it is recorded on the trial as well.
+      const trialNumber = trialNumberInMolarityKey(action.stageKey, action.questionKey);
+      if (trialNumber !== null && action.questionKey === trialMolarityKey(action.stageKey, trialNumber)) {
+        const reported = reportMolarity(
+          session,
+          action.stageKey,
+          trialNumber,
+          action.value,
+        );
+        if (!reported.ok) return rejected(reported);
+      }
+      const result = submitCalculation(
+        session,
+        action.stageKey,
+        action.questionKey,
+        action.value,
+        action.unit,
+        action.trialNumber ?? trialNumber,
+      );
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "mount_burette": {
+      const result = mountBurette(session, action.stageKey, action.mounted);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "add_khp": {
+      const result = addKhp(session, action.stageKey);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "place_beaker_on_balance": {
+      const result = placeBeakerOnBalance(session, action.stageKey, action.onPan);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "set_stopcock_angle": {
+      const result = setStopcockAngle(session, action.stageKey, action.angleDeg);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "spill_titrant": {
+      const result = spillTitrant(session, action.stageKey, action.volumeMl);
+      return result.ok ? acceptedOutcome() : rejected(result);
+    }
+    case "record_cylinder_volume": {
+      const result = recordCylinderVolume(session, action.stageKey, action.volumeMl);
+      return result.ok ? acceptedOutcome() : rejected(result);
     }
     case "record_observation": {
       // Which observation fields exist is a property of the EXPERIMENT, not of
@@ -313,7 +405,6 @@ export function dispatchTitrationAction(
           code: "undeclared_observation_field",
           message: `This experiment has no observation field named ${action.fieldKey}`,
           colour: null,
-          calculationCorrect: null,
         };
       }
       const result = recordObservation(session, action.stageKey, action.fieldKey, action.text);

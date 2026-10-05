@@ -30,6 +30,13 @@ import { judgeEndpointStop, observeFlaskColour, flaskColourFromConfigName, type 
 import { deriveHiddenState, type AttemptHiddenState } from "./hidden";
 import { classifyReadingError } from "./reading";
 import {
+  clampStopcockAngle,
+  emptyStageWorld,
+  stageWorldObservation,
+  type StageWorld,
+  type StageWorldObservation,
+} from "./world";
+import {
   averageTwoClosest,
   closestPairSpread,
   evaluateConcordanceForRules,
@@ -61,6 +68,26 @@ export interface StageSession {
   openTrial: TrialRecord | null;
   /** Procedure preparation (Part 2): cleaning, conditioning, KHP handling. */
   preparation: StagePreparation;
+  /**
+   * Physical placement facts: what is clamped, what is turned, what is
+   * standing in a vessel. World state, not procedure state and not chemistry.
+   */
+  world: StageWorld;
+}
+
+/**
+ * One student-submitted calculation value.
+ *
+ * The student's own number for a declared calculation prompt. Stored as the
+ * student's work; correctness is recomputed server-side at grade time from
+ * hidden state, so no expected value ever lives in the session document.
+ */
+export interface CalculationSubmission {
+  readonly stageKey: string;
+  readonly questionKey: string;
+  readonly value: number;
+  readonly unit: string;
+  readonly trialNumber: number | null;
 }
 
 /**
@@ -121,6 +148,17 @@ export interface StagePreparation {
    * taking the portion is a step in its own right.
    */
   beakerObtained: boolean;
+  /**
+   * The beaker is standing on the balance pan. A real precondition for reading
+   * the instrument: a balance with an empty pan displays nothing to record.
+   */
+  beakerOnBalance: boolean;
+  /**
+   * The KHP standard has been tipped into the beaker. The WORLD fact that makes
+   * the second weighing read heavier than the first; the sample mass itself is
+   * still the student's own subtraction of the two readings they record.
+   */
+  khpAdded: boolean;
   /** Flask placed under the burette, ready to titrate. */
   flaskPlaced: boolean;
   /** The latest completed trial has been discarded into waste. */
@@ -145,6 +183,8 @@ export function emptyPreparation(): StagePreparation {
     khpTransferred: false,
     beakerRinses: 0,
     beakerObtained: false,
+    beakerOnBalance: false,
+    khpAdded: false,
     flaskPlaced: false,
     // True until a trial completes: waste tracking starts with the first trial
     // run under this state, so resumed attempts are never asked to discard a
@@ -199,11 +239,25 @@ export interface TitrationSessionState {
   readonly errorEvents: ErrorEvent[];
   completedTrials: number;
   observations: PublicObservation[];
+  /** The student's own submitted calculations, keyed by prompt. Student work. */
+  calculations: CalculationSubmission[];
+  /**
+   * The procedure step the student is reading, so a resume opens where they left
+   * off (§33). Navigation state only: it never gates an action, because the
+   * procedure is a guide and the student is allowed to work ahead or step back.
+   */
+  procedureStep: number;
 }
 
-/** Safe-to-render projection: session state plus freshly derived concordance. */
+/**
+ * Safe-to-render projection: session state plus the figures the server derives
+ * on every read — the concordance summary and the instrument observations.
+ */
 export interface TitrationPublicState extends Omit<TitrationSessionState, "stages"> {
-  readonly stages: Record<string, StageSession & { concordance: StageConcordance }>;
+  readonly stages: Record<
+    string,
+    StageSession & { concordance: StageConcordance; observation: StageWorldObservation }
+  >;
   readonly observations: PublicObservation[];
 }
 
@@ -259,6 +313,7 @@ export function createTitrationSession(
       reportedMolaritiesM: [],
       openTrial: null,
       preparation: emptyPreparation(),
+      world: emptyStageWorld(),
     };
   }
   return {
@@ -272,8 +327,250 @@ export function createTitrationSession(
       errorEvents: [],
       completedTrials: 0,
       observations: [],
+      calculations: [],
+      procedureStep: 1,
     },
   };
+}
+
+/** Remember where in the procedure the student is reading. */
+export function setProcedureStep(
+  session: TitrationSession,
+  step: number,
+): ActionResult {
+  if (!Number.isInteger(step) || step < 1 || step > 60) {
+    return fail("procedure step out of range", "invalid_sequence");
+  }
+  session.public.procedureStep = step;
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// PHYSICAL WORLD ACTIONS
+//
+// What the student does with their hands before any chemistry happens. None of
+// these decides a concentration: they move apparatus, turn a valve and record
+// what a vessel holds. Chemistry stays where it was.
+// ---------------------------------------------------------------------------
+
+/**
+ * Clamp the burette on the stand, or lift it off.
+ *
+ * A burette cannot be filled while it is lying in its cradle, so this is the
+ * physical precondition the fill gate reads. Un-mounting is allowed: a student
+ * who takes the instrument down has to put it back, which is its own lesson.
+ */
+export function mountBurette(
+  session: TitrationSession,
+  stageKey: string,
+  mounted: boolean,
+): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (typeof mounted !== "boolean") {
+    return fail("mounting state must be a boolean", "invalid_sequence");
+  }
+  if (!mounted && stage.apparatusReady && stage.trials.length === 0 && stage.deliveredSoFarMl > 0) {
+    // Taking a charged burette off the stand spills it; the world records the
+    // loss rather than pretending nothing happened (§9).
+    return fail(
+      "a charged burette cannot be lifted off the clamp: drain it over the waste container first",
+      "invalid_sequence",
+    );
+  }
+  stage.world.buretteMounted = mounted;
+  return { ok: true };
+}
+
+/** Turn the stopcock handle. Records the handle position; delivers nothing. */
+export function setStopcockAngle(
+  session: TitrationSession,
+  stageKey: string,
+  angleDeg: number,
+): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (!Number.isFinite(angleDeg)) {
+    return fail("stopcock angle must be a number", "invalid_sequence");
+  }
+  stage.world.stopcockAngleDeg = clampStopcockAngle(angleDeg);
+  return { ok: true };
+}
+
+/**
+ * Tip the standard into the beaker.
+ *
+ * The amount that ends up in the beaker is the sample the attempt actually
+ * weighed out (a world fact); the student still determines the mass from their
+ * own two weighings by difference. Adding it while the beaker sits on the pan
+ * is refused, because the manual's method is weighing BY DIFFERENCE: the empty
+ * beaker is weighed on its own, and the standard is added off the balance.
+ */
+export function addKhp(session: TitrationSession, stageKey: string): ActionResult {
+  const cfg = stageConfig(session.config, stageKey);
+  const stage = mutableStage(session, stageKey);
+  if (cfg.analytePortion.kind !== "weighed_mass") {
+    return fail("this stage has no solid standard to add", "invalid_sequence");
+  }
+  const prep = stage.preparation;
+  if (prep.khpAdded) {
+    return fail("the standard is already in the beaker", "invalid_sequence");
+  }
+  if (prep.beakerOnBalance) {
+    return fail(
+      "take the beaker off the pan before adding the standard: the method is weighing by difference",
+      "invalid_sequence",
+    );
+  }
+  if (prep.beakerMassG === null) {
+    return fail("weigh the empty beaker before adding the standard", "invalid_sequence");
+  }
+  prep.khpAdded = true;
+  stage.flaskColour = null;
+  return { ok: true };
+}
+
+/**
+ * Set down, or lift off, the beaker on the balance pan.
+ *
+ * The pan is an instrument: what it displays is what stands on it. The UI sends
+ * this when the student physically releases the beaker over the pan (or picks it
+ * up again), and the reading gate refuses a weighing the pan cannot show.
+ */
+export function placeBeakerOnBalance(
+  session: TitrationSession,
+  stageKey: string,
+  onPan: boolean,
+): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (typeof onPan !== "boolean") {
+    return fail("placement must be a boolean", "invalid_sequence");
+  }
+  stage.preparation.beakerOnBalance = onPan;
+  return { ok: true };
+}
+
+/**
+ * Pour titrant while no trial is running.
+ *
+ * Refusing this would teach nothing: a student who opens the tap before starting
+ * a trial watches the burette empty. The volume is recorded as spilled — it
+ * lowers the liquid level and leaves the trial's own readings inconsistent, which
+ * is exactly the consequence a real bench produces (§9, §24).
+ */
+export function spillTitrant(
+  session: TitrationSession,
+  stageKey: string,
+  volumeMl: number,
+): ActionResult {
+  const cfg = stageConfig(session.config, stageKey);
+  const stage = mutableStage(session, stageKey);
+  if (!(volumeMl > 0) || !Number.isFinite(volumeMl)) {
+    return fail("the spill volume must be positive", "invalid_sequence");
+  }
+  if (stage.openTrial) {
+    return fail("a trial is running: deliver into the flask instead", "invalid_sequence");
+  }
+  const available = Math.max(0, cfg.burette.capacityMl - stage.world.spilledMl);
+  const spilled = Math.min(volumeMl, available);
+  if (spilled <= 0) return fail("the burette is empty", "excessive_delivery");
+  stage.world.spilledMl = roundTo(stage.world.spilledMl + spilled, 2);
+  recordError(session, {
+    code: "invalid_sequence",
+    trialNumber: null,
+    stageKey,
+    // SECURITY: no hidden value is quoted here; this detail is persisted into
+    // the public snapshot and shipped to the browser.
+    detail: "titrant run out with no trial open: the level has dropped",
+    severe: false,
+  });
+  return { ok: true };
+}
+
+/**
+ * Record what the measuring cylinder holds after the student has poured into it.
+ *
+ * A WORLD level, not a student measurement: the student reads this and records
+ * their own volume separately. In Part I it feeds no concentration (the
+ * procedure states no exact dilution volume), and in Part III the aliquot the
+ * student records is what their calculation carries.
+ */
+export function recordCylinderVolume(
+  session: TitrationSession,
+  stageKey: string,
+  volumeMl: number,
+): ActionResult {
+  const stage = mutableStage(session, stageKey);
+  if (!(volumeMl >= 0) || !Number.isFinite(volumeMl) || volumeMl > 2000) {
+    return fail("cylinder volume must be a plausible number of millilitres", "invalid_sequence");
+  }
+  stage.world.cylinderVolumeMl = roundTo(volumeMl, 2);
+  return { ok: true };
+}
+
+/**
+ * Apply the bounded physical patch an envelope may carry alongside an action.
+ *
+ * Whitelisted and non-chemistry by construction: the valve angle inside its
+ * quarter turn and a measuring-cylinder level inside a plausible range. Both are
+ * facts about the student's own hands, and neither can set a concentration, an
+ * endpoint or a grade.
+ */
+export function applyPhysicalPatch(
+  session: TitrationSession,
+  stageKey: string,
+  patch: { stopcockAngleDeg?: number; cylinderVolumeMl?: number },
+): void {
+  const stage = mutableStage(session, stageKey);
+  if (patch.stopcockAngleDeg !== undefined) {
+    stage.world.stopcockAngleDeg = clampStopcockAngle(patch.stopcockAngleDeg);
+  }
+  if (patch.cylinderVolumeMl !== undefined) {
+    stage.world.cylinderVolumeMl = roundTo(patch.cylinderVolumeMl, 2);
+  }
+}
+
+/**
+ * Record a student's own calculation value for a declared prompt.
+ *
+ * Nothing is checked here beyond shape: whether the value is right is a question
+ * for server-side grading AFTER submission (§23). The student may correct their
+ * own draft as often as they like before then.
+ */
+export function submitCalculation(
+  session: TitrationSession,
+  stageKey: string,
+  questionKey: string,
+  value: number,
+  unit: string,
+  trialNumber: number | null = null,
+): ActionResult {
+  mutableStage(session, stageKey);
+  if (!OBSERVATION_FIELD_KEY_PATTERN.test(questionKey)) {
+    return fail("unknown calculation prompt", "invalid_sequence");
+  }
+  if (!Number.isFinite(value)) {
+    return fail("a calculation must be a finite number", "invalid_sequence");
+  }
+  const trimmedUnit = unit.trim();
+  if (trimmedUnit.length === 0 || trimmedUnit.length > 24) {
+    return fail("a calculation needs its unit", "invalid_sequence");
+  }
+  if (trialNumber !== null && !Number.isInteger(trialNumber)) {
+    return fail("trial number must be an integer", "invalid_sequence");
+  }
+  const rest = session.public.calculations.filter(
+    (entry) => entry.questionKey !== questionKey,
+  );
+  session.public.calculations = [
+    ...rest,
+    {
+      stageKey,
+      questionKey,
+      value: roundTo(value, 8),
+      unit: trimmedUnit,
+      trialNumber,
+    },
+  ];
+  return { ok: true };
 }
 
 /** Rinse + fill + clamp + expel bubbles: one setup step per stage. */
@@ -307,6 +604,14 @@ export function setupApparatus(
   if (stageHasRecordedWork(stage)) {
     return fail(
       "the burette is already set up for this stage: record the next trial's initial reading instead of filling it again",
+      "invalid_sequence",
+    );
+  }
+  // Physical precondition, not a formality: a burette lying in its cradle cannot
+  // be filled. The student hangs it on the clamp first.
+  if (!stage.world.buretteMounted) {
+    return fail(
+      "clamp the burette on the stand before filling it",
       "invalid_sequence",
     );
   }
@@ -512,7 +817,7 @@ export function addTitrant(
   if (!(volumeMl > 0) || !Number.isFinite(volumeMl)) {
     return fail("titrant increment must be positive", "invalid_sequence");
   }
-  const deliveredSoFar = trialDelivered(trial) + volumeMl;
+  const deliveredSoFar = trialDeliveredVolumeMl(trial) + volumeMl;
   const truth = session.hidden.stages[stageKey];
   if (!titreFitsBurette(cfg.burette, trial.initialReadingMl, deliveredSoFar)) {
     recordError(session, {
@@ -525,7 +830,7 @@ export function addTitrant(
     return fail("burette capacity exceeded: refill and repeat the trial", "excessive_delivery");
   }
   trial.errorCodes.push(`delivered:${roundTo(volumeMl, 2)}`);
-  const total = trialDelivered(trial);
+  const total = trialDeliveredVolumeMl(trial);
   stage.deliveredSoFarMl = total;
   const colour = observeFlaskColour(cfg.indicator, total, {
     equivalenceMl: truth.equivalenceMl,
@@ -535,7 +840,12 @@ export function addTitrant(
   return { ok: true, colour };
 }
 
-function trialDelivered(trial: TrialRecord): number {
+/**
+ * Volume actually delivered into the open/recorded trial, from the engine's own
+ * record of every increment. Exported so the persistence layer can reconstruct
+ * where the meniscus stood at the moment a reading was taken (§28).
+ */
+export function trialDeliveredVolumeMl(trial: TrialRecord): number {
   let total = 0;
   for (const code of trial.errorCodes) {
     if (code.startsWith("delivered:")) total += Number(code.slice("delivered:".length));
@@ -556,7 +866,7 @@ export function readBurette(
   }
   try {
     const delivered = deliveredVolumeMl(cfg.burette, trial.initialReadingMl, observedFinalMl);
-    const expected = trialDelivered(trial);
+    const expected = trialDeliveredVolumeMl(trial);
     if (Math.abs(delivered - expected) > 0.06) {
       recordError(session, {
         code: "reading_error",
@@ -586,7 +896,7 @@ export function observeEndpoint(
     return fail("no open trial to observe", "invalid_sequence");
   }
   const truth = session.hidden.stages[stageKey];
-  const delivered = trial.deliveredMl ?? trialDelivered(trial);
+  const delivered = trial.deliveredMl ?? trialDeliveredVolumeMl(trial);
   const actual = observeFlaskColour(cfg.indicator, delivered, {
     equivalenceMl: truth.equivalenceMl,
     observableMl: truth.observableMl,
@@ -951,6 +1261,13 @@ export function weighBeakerMass(
     return fail("weighed mass must be positive", "invalid_sequence");
   }
   const prep = stage.preparation;
+  // The pan is an instrument: there is no reading to record while it is empty.
+  if (!prep.beakerOnBalance) {
+    return fail(
+      "stand the beaker on the balance pan before reading its mass",
+      "invalid_sequence",
+    );
+  }
   const massG = roundTo(observedMassG, 2);
   if (prep.beakerMassG === null) {
     prep.beakerMassG = massG;
@@ -958,6 +1275,12 @@ export function weighBeakerMass(
   }
   if (prep.beakerPlusKhpMassG !== null) {
     return fail("both beaker weighings are already recorded for this stage", "invalid_sequence");
+  }
+  if (!prep.khpAdded) {
+    return fail(
+      "take the beaker off the pan and add the standard before re-weighing it",
+      "invalid_sequence",
+    );
   }
   if (!(massG > prep.beakerMassG)) {
     recordError(session, {
@@ -1067,6 +1390,9 @@ export function discardToWaste(session: TitrationSession, stageKey: string): Act
   }
   stage.preparation.lastTrialDiscarded = true;
   stage.preparation.wasteDiscards += 1;
+  // The waste container fills up: it is what the student sees when they look at
+  // it, and a world fact rather than a chemistry number.
+  stage.world.wasteMl = roundTo(stage.world.wasteMl + 60, 2);
   // A fresh flask is colourless until the next trial's indicator chemistry.
   stage.flaskColour = null;
   return { ok: true };
@@ -1278,9 +1604,34 @@ export function projectStageConcordance(
  */
 export function projectPublicState(session: TitrationSession): TitrationPublicState {
   const base = JSON.parse(JSON.stringify(session.public)) as TitrationSessionState;
-  const stages: Record<string, StageSession & { concordance: StageConcordance }> = {};
+  const stages: Record<
+    string,
+    StageSession & { concordance: StageConcordance; observation: StageWorldObservation }
+  > = {};
   for (const [key, stage] of Object.entries(base.stages)) {
-    stages[key] = { ...stage, concordance: projectStageConcordance(session.config, stage) };
+    const truth = session.hidden.stages[key];
+    stages[key] = {
+      ...stage,
+      concordance: projectStageConcordance(session.config, stage),
+      // What the glass and the pan SHOW. Derived on every read from the world
+      // facts plus the attempt's own instrument truth, so a resumed attempt
+      // shows the level it left rather than the last number anyone typed.
+      observation: truth
+        ? stageWorldObservation({
+            config: session.config,
+            stageKey: key,
+            stage,
+            hidden: truth,
+            beakerTareG: session.hidden.beakerTareG,
+          })
+        : {
+            buretteReadingMl: null,
+            balanceDisplayG: null,
+            balanceHasBeaker: stage.preparation.beakerOnBalance,
+            cylinderVolumeMl: stage.world.cylinderVolumeMl,
+            wasteMl: stage.world.wasteMl,
+          },
+    };
   }
   return { ...base, stages };
 }

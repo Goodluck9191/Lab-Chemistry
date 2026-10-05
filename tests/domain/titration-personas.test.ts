@@ -6,6 +6,7 @@ import {
   completeTrial,
   createTitrationSession,
   gradeSession,
+  mountBurette,
   readBurette,
   reportMolarity,
   setupApparatus,
@@ -18,6 +19,7 @@ const STAGE_A = "stage-a-khp-naoh";
 
 function setupStageA(session: TitrationSession, seed: string): void {
   void seed;
+  mountBurette(session, STAGE_A, true);
   setupApparatus(session, STAGE_A, "naoh", 0);
   weighAnalyte(session, STAGE_A, 0.6);
   addIndicator(session, STAGE_A, 3);
@@ -113,6 +115,7 @@ describe("personas", () => {
 
   it("wrong sequence: indicator before analyte is rejected", () => {
     const session = createTitrationSession(exp02TitrationConfig, "persona-sequence");
+    mountBurette(session, STAGE_A, true);
     setupApparatus(session, STAGE_A, "naoh", 0);
     const result = addIndicator(session, STAGE_A, 3);
     expect(result.ok).toBe(false);

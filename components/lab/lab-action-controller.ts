@@ -69,7 +69,6 @@ export interface LabControllerState {
     accepted: boolean;
     code: string | null;
     message: string | null;
-    calculationCorrect: boolean | null;
   } | null;
 }
 
@@ -137,20 +136,11 @@ function reducer(state: LabControllerState, action: ReducerAction): LabControlle
           title: "The laboratory did not accept that",
           message: outcome.message ?? "That action is not valid right now.",
         };
-      } else if (outcome.calculationCorrect === true) {
-        notice = {
-          tone: "success",
-          title: "Calculation accepted",
-          message: "That value agrees with the simulation within the accepted tolerance.",
-        };
-      } else if (outcome.calculationCorrect === false) {
-        notice = {
-          tone: "warning",
-          title: "Calculation not accepted",
-          message:
-            "That value is outside the accepted tolerance. Check your arithmetic and the readings you used.",
-        };
       }
+      // A reported calculation deliberately produces NO verdict: before
+      // submission the student owns their work and the laboratory keeps its
+      // assessment to itself (§20, §23). The value is stored, and that is all
+      // the student is told.
       return {
         ...state,
         revision: action.revision,
@@ -166,14 +156,12 @@ function reducer(state: LabControllerState, action: ReducerAction): LabControlle
           action: action.action,
           accepted: outcome.accepted,
           colour: outcome.colour,
-          calculationCorrect: outcome.calculationCorrect,
           publicState: action.publicState,
         }),
         lastOutcome: {
           accepted: outcome.accepted,
           code: outcome.code,
           message: outcome.message,
-          calculationCorrect: outcome.calculationCorrect,
         },
       };
     }
@@ -228,16 +216,32 @@ export type LabStateLoader = (attemptId: string) => Promise<LabStateOutcome>;
  * Build the versioned envelope. Exported so a test can assert the exact shape
  * that reaches the server, and so no component has to know it.
  */
+/**
+ * Physical facts that may ride along with an action: where a valve was left and
+ * how much stands in the measuring cylinder, plus the student's place in the
+ * procedure. Bounded, whitelisted and non-chemistry — the envelope schema
+ * rejects anything else, so a component cannot smuggle world state through it.
+ */
+export interface PhysicalCompanion {
+  physical?: { stopcockAngleDeg?: number; cylinderVolumeMl?: number };
+  procedureStep?: number;
+}
+
 export function buildActionEnvelope(
   attemptId: string,
   baseRevision: number,
   action: Record<string, unknown>,
+  companion: PhysicalCompanion = {},
 ) {
   return {
     protocolVersion: SIMULATION_PROTOCOL_VERSION,
     attemptId,
     baseRevision,
     action,
+    ...(companion.physical ? { physical: companion.physical } : {}),
+    ...(companion.procedureStep !== undefined
+      ? { procedureStep: companion.procedureStep }
+      : {}),
   };
 }
 
@@ -272,7 +276,10 @@ export function useLabActionController({
   const inFlight = useRef(false);
 
   const perform = useCallback(
-    async (action: Record<string, unknown> & { type: string }): Promise<LabActionOutcome | null> => {
+    async (
+      action: Record<string, unknown> & { type: string },
+      companion: PhysicalCompanion = {},
+    ): Promise<LabActionOutcome | null> => {
       if (inFlight.current) {
         // The UI disables controls while pending; this is the belt-and-braces
         // guard against a double submit from a keyboard or a slow frame.
@@ -281,7 +288,9 @@ export function useLabActionController({
       inFlight.current = true;
       dispatch({ type: "action_started", action });
       try {
-        const outcome = await send(buildActionEnvelope(attemptId, revisionRef.current, action));
+        const outcome = await send(
+          buildActionEnvelope(attemptId, revisionRef.current, action, companion),
+        );
         const at = new Date().toISOString();
         if (outcome.status === "ok") {
           dispatch({

@@ -4,7 +4,9 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type Dispatch,
   type ReactNode,
@@ -17,6 +19,7 @@ import {
   type LabActionSender,
   type LabControllerState,
   type LabStateLoader,
+  type PhysicalCompanion,
 } from "./lab-action-controller";
 import { buildLabViewModel, type LabViewModel } from "./view-model";
 import type { AliquotStage } from "./aliquot-stage";
@@ -31,6 +34,19 @@ import { NO_ROTATION, rotateBy, type HeldRotation } from "./3d/simulation/keymap
 import { NEUTRAL_HOLD, clampTilt, tiltBy, type HoldPose } from "./3d/interactions/hold";
 import type { PhysicalSelectionKey } from "./3d/simulation/apparatus-state";
 import type { BenchPoint } from "./3d/simulation/spatial";
+
+/**
+ * What the student is recording, by instrument. One recorder, several subjects:
+ * the student reads a value off an instrument and enters it themselves (§28).
+ */
+export type RecorderKind =
+  | "burette_initial"
+  | "burette_final"
+  | "beaker_empty_mass"
+  | "beaker_loaded_mass"
+  | "cylinder_stock_volume"
+  | "cylinder_aliquot_volume"
+  | "endpoint_colour";
 
 /**
  * TWO kinds of state, deliberately kept apart (§29):
@@ -55,7 +71,15 @@ export interface LabServerContextValue {
   state: LabControllerState;
   pending: boolean;
   saveStatus: LabControllerState["saveStatus"];
-  perform: (action: { type: string } & Record<string, unknown>) => Promise<LabActionOutcome | null>;
+  /**
+   * Send one protocol action. The optional companion carries the physical facts
+   * of the same gesture (valve angle, cylinder level) and the procedure step the
+   * student is reading, so a resumed room reconstructs itself from one write.
+   */
+  perform: (
+    action: { type: string } & Record<string, unknown>,
+    companion?: PhysicalCompanion,
+  ) => Promise<LabActionOutcome | null>;
   refresh: () => Promise<boolean>;
   clearNotice: () => void;
 }
@@ -63,6 +87,27 @@ export interface LabServerContextValue {
 export interface LabUiContextValue {
   activeStageKey: string;
   setActiveStageKey: (key: string) => void;
+  /**
+   * The procedure step the student is reading. UI-first, persisted with the next
+   * action so a resume opens where they left off; it never gates anything.
+   */
+  procedureStep: number;
+  setProcedureStep: (step: number) => void;
+  /** The step the SERVER last confirmed, for the "resume" starting point. */
+  savedProcedureStep: number;
+  /**
+   * The accessibility surface (§35). Off by default: the 3D room is the primary
+   * interface and this is the documented fallback for a device without WebGL or
+   * a student who cannot perform pointer gestures.
+   */
+  accessibilityOpen: boolean;
+  setAccessibilityOpen: (open: boolean) => void;
+  /** Open the help/guidance surface (§26). */
+  helpOpen: boolean;
+  setHelpOpen: (open: boolean) => void;
+  /** The recorder overlay: which reading is being recorded, or null. */
+  recorder: RecorderKind | null;
+  setRecorder: (kind: RecorderKind | null) => void;
   /** Stage whose stopcock is currently open, or null. */
   stopcockOpenForStage: string | null;
   /**
@@ -204,6 +249,10 @@ export function LabStateProvider({
     "";
 
   const [selectedStageKey, setSelectedStageKey] = useState<string | null>(null);
+  const [procedureStep, setProcedureStep] = useState<number>(initialState.publicState.procedureStep);
+  const [accessibilityOpen, setAccessibilityOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [recorder, setRecorder] = useState<RecorderKind | null>(null);
   // One valve position, remembered per stage: a student who steps away from the
   // burette leaves the tap where they left it.
   const [stopcockAngles, setStopcockAngles] = useState<Record<string, number>>({});
@@ -240,6 +289,14 @@ export function LabStateProvider({
 
   const activeStageKey = selectedStageKey ?? derivedStageKey;
 
+  // The student's place in the procedure rides along with every action, so a
+  // resumed room opens on the step they were reading without a second write
+  // path (§33). The ref is synced in an effect, never during render.
+  const procedureStepRef = useRef(procedureStep);
+  useEffect(() => {
+    procedureStepRef.current = procedureStep;
+  }, [procedureStep]);
+
   const viewModel = useMemo(
     () =>
       buildLabViewModel({
@@ -260,13 +317,22 @@ export function LabStateProvider({
     ],
   );
 
+  const sendPerform = controller.perform;
+  const perform = useCallback(
+    (
+      action: { type: string } & Record<string, unknown>,
+      companion: PhysicalCompanion = {},
+    ) => sendPerform(action, { procedureStep: procedureStepRef.current, ...companion }),
+    [sendPerform],
+  );
+
   const serverValue: LabServerContextValue = {
     attemptId: initialState.attemptId,
     canWrite: initialState.canWrite,
     state: controller.state,
     pending: controller.pending,
     saveStatus: controller.state.saveStatus,
-    perform: controller.perform,
+    perform: perform as LabServerContextValue["perform"],
     refresh: controller.refresh,
     clearNotice: controller.clearNotice,
   };
@@ -343,6 +409,15 @@ export function LabStateProvider({
   const uiValue: LabUiContextValue = {
     activeStageKey,
     setActiveStageKey: setSelectedStageKey,
+    procedureStep,
+    setProcedureStep,
+    savedProcedureStep: initialState.publicState.procedureStep,
+    accessibilityOpen,
+    setAccessibilityOpen,
+    helpOpen,
+    setHelpOpen,
+    recorder,
+    setRecorder,
     stopcockOpenForStage,
     toggleStopcock,
     stopcockAngleForStage,

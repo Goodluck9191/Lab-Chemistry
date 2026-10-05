@@ -21,6 +21,7 @@ import { titrationNeedsMount } from "./3d/interactions/mounting";
 import {
   FLASK_TILE_SLOT,
   VOLUMETRIC_FLASK_SLOT,
+  balancePlacementValid,
   flaskReceivingValid,
   wastePlacementValid,
   type BenchPoint,
@@ -221,19 +222,24 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
 
   const trialOpen = stage?.openTrial !== null && stage?.openTrial !== undefined;
   const buretteSetup = stage?.burette.setup === true;
-  // The authoritative setup IS the physical mounting: the glass tube lives in
-  // the stand's assembly, so "set up" and "clamped on" are the same fact.
-  const mounted = buretteSetup;
+  // The authoritative mounting is the server's own world fact (world.buretteMounted),
+  // written when the student clamps the burette on the stand. `burette.setup`
+  // (apparatusReady) is a different fact — the burette has been FILLED — so it
+  // can no longer stand in for mounting.
+  const serverMounted = stage?.burette.mounted === true;
+  const mounted = serverMounted;
   const mountCheck = titrationNeedsMount({ mounted, flaskInReceiving });
   const readingMl = stage?.burette.readingMl ?? null;
   const capacityMl = stage?.burette.capacityMl ?? 50;
   const graduationMl = stage?.burette.graduationMl ?? 0.1;
   const buretteRemainingMl = readingMl === null ? 0 : Math.max(0, capacityMl - readingMl);
 
-  // The open path: the valve is off its seat, a trial is running, the burette
-  // is physically mounted and the flask is under the tip. The mounting rule is
-  // expressed through `mounting.ts` so the physical precondition has one home.
-  const pathOpen = stopcockOpen && trialOpen && mountCheck.available && interactive && readingMl !== null;
+  // The valve is PASSING LIQUID whenever it stands open on a mounted burette
+  // with something in it and the flask under the tip. Whether that liquid lands
+  // in a running trial or runs out with no trial open is the student's own
+  // doing (§9): with a trial it is a delivery, without one it is a spill.
+  const valveFlowing = stopcockOpen && mountCheck.available && interactive && readingMl !== null;
+  const pathOpen = valveFlowing && trialOpen;
 
   // Keep the UI's mounting flag in step with the authoritative setup, so the
   // prompt and the scene agree about whether the burette is up.
@@ -250,7 +256,7 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
 
   // ---- Flow accumulation loop ----------------------------------------------
   useEffect(() => {
-    if (!stage || !pathOpen) return;
+    if (!stage || !valveFlowing) return;
     const rate = stopcockRateMlPerSecond(stopcockAngle);
     const id = window.setInterval(() => {
       setAccumulatedMl((current) =>
@@ -265,7 +271,7 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     }, 100);
     void rate;
     return () => window.clearInterval(id);
-  }, [stage, pathOpen, flowMode, stopcockAngle, graduationMl, buretteRemainingMl]);
+  }, [stage, valveFlowing, flowMode, stopcockAngle, graduationMl, buretteRemainingMl]);
 
   // Drop the unconfirmed preview whenever the server state moves on (a
   // render-time adjustment, not an effect: the preview belongs to the previous
@@ -277,20 +283,40 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     setAccumulatedMl(0);
   }
 
-  /** Send the accumulated pour as ONE action. Does not touch the valve. */
-  const confirmPour = useCallback(async () => {
-    if (!stage || sending.current) return;
-    const quantized = quantizeDeliveryMl(accumulatedMl, graduationMl);
-    setAccumulatedMl(0);
-    if (quantized > 0 && trialOpen) {
+  /**
+   * Send the accumulated pour as ONE action. Does not touch the valve.
+   *
+   * With a trial open the liquid is a delivery; with none it is a SPILL, and the
+   * engine records it as lost volume so the meniscus drops honestly (§9, §24).
+   * Either way the current valve position rides along as a bounded physical
+   * patch, so a resumed room shows the tap where it was left (§33).
+   */
+  const confirmPour = useCallback(
+    async (angleDeg: number = stopcockAngle) => {
+      if (!stage || sending.current) return;
+      const quantized = quantizeDeliveryMl(accumulatedMl, graduationMl);
+      setAccumulatedMl(0);
+      if (quantized <= 0) return;
       sending.current = true;
       try {
-        await perform({ type: "add_titrant", stageKey: activeStageKey, volumeMl: quantized });
+        const companion = { physical: { stopcockAngleDeg: angleDeg } };
+        if (trialOpen) {
+          await perform(
+            { type: "add_titrant", stageKey: activeStageKey, volumeMl: quantized },
+            companion,
+          );
+        } else {
+          await perform(
+            { type: "spill_titrant", stageKey: activeStageKey, volumeMl: quantized },
+            companion,
+          );
+        }
       } finally {
         sending.current = false;
       }
-    }
-  }, [stage, accumulatedMl, graduationMl, activeStageKey, trialOpen, perform]);
+    },
+    [stage, accumulatedMl, graduationMl, activeStageKey, trialOpen, perform, stopcockAngle],
+  );
 
   /** Turn the valve by hand. Shutting it records whatever passed. */
   const handleValveAngle = useCallback(
@@ -310,7 +336,9 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
         return;
       }
       setPhysicalNotice(null);
-      if (!wasOpen && accumulatedMl > 0) void confirmPour();
+      // Shutting the tap records whatever passed through it, tagging the action
+      // with the valve's new position.
+      if (!wasOpen && accumulatedMl > 0) void confirmPour(angleDeg);
     },
     [
       canUseStopcock,
@@ -336,12 +364,12 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
         buretteRemainingMl: buretteRemainingMl - accumulatedMl,
         receiverInPosition: flaskInReceiving,
         trialOpen,
-      }) &&
+      }      ) &&
       accumulatedMl > 0
     ) {
       void confirmPour();
     }
-  }, [pathOpen, stopcockOpen, trialOpen, buretteRemainingMl, accumulatedMl, flaskInReceiving, confirmPour]);
+  }, [pathOpen, valveFlowing, stopcockOpen, trialOpen, buretteRemainingMl, accumulatedMl, flaskInReceiving, confirmPour]);
 
   // ---- Looking at things ----------------------------------------------------
   /**
@@ -410,11 +438,18 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     [stage, canWrite, pending, perform, setFlaskBenchPos],
   );
 
+  // Setting the beaker down on the pan (or lifting it off) is a world fact the
+  // balance reads: the pan only shows a mass for what actually stands on it.
   const handleBeakerDrop = useCallback(
     (point: BenchPoint) => {
       setBeakerBenchPos(point);
+      if (!stage) return;
+      const onPan = balancePlacementValid(point);
+      if (onPan !== stage.preparationState.beakerOnBalance) {
+        void perform({ type: "place_beaker_on_balance", stageKey: stage.key, onPan });
+      }
     },
-    [setBeakerBenchPos],
+    [stage, perform, setBeakerBenchPos],
   );
 
   // ---- Setting a carried vessel down ---------------------------------------
@@ -430,6 +465,15 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     const release = holdReleaseFor(previous, point);
     if (release.kind === "burette_mount") {
       setBuretteMounted(release.mounted);
+      // Clamping the burette is what makes it fillable: persist the physical
+      // fact so the server's fill gate and the resumed room agree.
+      if (stage && release.mounted !== serverMounted) {
+        void perform({
+          type: "mount_burette",
+          stageKey: stage.key,
+          mounted: release.mounted,
+        });
+      }
       return;
     }
     if (release.kind === "discard") {
@@ -456,10 +500,17 @@ export function LabBench3D({ initialState }: { initialState: LabStateView }) {
     }
     if (previous === "beaker") {
       setBeakerBenchPos(release.pos);
+      if (stage) {
+        const onPan = balancePlacementValid(release.pos);
+        if (onPan !== stage.preparationState.beakerOnBalance) {
+          void perform({ type: "place_beaker_on_balance", stageKey: stage.key, onPan });
+        }
+      }
     }
   }, [
     carried,
     stage,
+    serverMounted,
     canWrite,
     pending,
     perform,

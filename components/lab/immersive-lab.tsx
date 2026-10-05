@@ -16,6 +16,9 @@ import { ReviewSubmitPanel } from "./review-submit-panel";
 import { useActiveStage, useLabServer, useLabUi, useLabViewModel } from "./lab-state-provider";
 import { LabHud } from "./3d/ui/LabHud";
 import { ContextPrompt } from "./3d/ui/ContextPrompt";
+import { StepCard } from "./3d/ui/StepCard";
+import { HelpOverlay } from "./3d/ui/HelpOverlay";
+import { RecorderOverlay } from "./3d/ui/RecorderOverlay";
 import { ReadingOverlay } from "./3d/ReadingOverlay";
 import { holdKindFor, holdKindForReagent, canCarry, holdVerbFor } from "./3d/interactions/carry";
 import { commandForCode, isTextEntryTarget } from "./3d/simulation/keymap";
@@ -34,7 +37,7 @@ import { cn } from "@/lib/utils";
  * keys advertised on screen are the keys that work.
  */
 export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
-  const [drawer, setDrawer] = useState<"procedure" | "actions" | "results" | null>(null);
+  const [drawer, setDrawer] = useState<"procedure" | "results" | null>(null);
   const stage = useActiveStage();
   const model = useLabViewModel();
   const { canWrite, pending } = useLabServer();
@@ -55,6 +58,12 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
     pointerLocked,
     readingMode,
     setReadingMode,
+    helpOpen,
+    setHelpOpen,
+    accessibilityOpen,
+    setAccessibilityOpen,
+    recorder,
+    setRecorder,
   } = useLabUi();
 
   const partLabel = !model.solution.ready
@@ -102,7 +111,10 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
   const closeEverything = useCallback(() => {
     setDrawer(null);
     setPromptOpen(false);
-  }, [setPromptOpen]);
+    setHelpOpen(false);
+    setAccessibilityOpen(false);
+    setRecorder(null);
+  }, [setPromptOpen, setHelpOpen, setAccessibilityOpen, setRecorder]);
 
   // Keyboard interaction (§40): E the primary verb, R rotate what is in hand,
   // F fly in to inspect, Space set down, Esc step back out. Typing a reading
@@ -119,6 +131,9 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
         // innermost surface first — the reading overlay is the most modal thing
         // on screen, the bench selection the least.
         if (readingMode) setReadingMode(false);
+        else if (recorder !== null) setRecorder(null);
+        else if (helpOpen) setHelpOpen(false);
+        else if (accessibilityOpen) setAccessibilityOpen(false);
         else if (drawer !== null) setDrawer(null);
         else if (promptOpen) setPromptOpen(false);
         else {
@@ -183,6 +198,12 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
     drawer,
     promptOpen,
     readingMode,
+    recorder,
+    helpOpen,
+    accessibilityOpen,
+    setRecorder,
+    setHelpOpen,
+    setAccessibilityOpen,
     carried,
     verb.picksUp,
     carrying.available,
@@ -236,9 +257,22 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
         partLabel={partLabel}
         drawer={drawer}
         onProcedure={() => setDrawer(drawer === "procedure" ? null : "procedure")}
-        onActions={() => setDrawer(drawer === "actions" ? null : "actions")}
+        onAccessible={() => setAccessibilityOpen(!accessibilityOpen)}
         onResults={() => setDrawer(drawer === "results" ? null : "results")}
+        onHelp={() => setHelpOpen(!helpOpen)}
       />
+
+      {/* The written procedure, one step at a time (§25). The student reads
+          WHAT to do; the room decides HOW. */}
+      <StepCard
+        procedure={initialState.procedure}
+        onOpenProcedure={() => setDrawer("procedure")}
+        onOpenHelp={() => setHelpOpen(true)}
+      />
+
+      {helpOpen ? <HelpOverlay onClose={() => setHelpOpen(false)} /> : null}
+
+      <RecorderOverlay />
 
       {/* Reading Mode is the precision view (§15): the action card would sit
           right over the flask and the scale, so it stands down while the
@@ -264,14 +298,17 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
         ) : null}
       </div>
 
+      {/* The accessible laboratory (§35): the same steps as buttons, for a
+          device without WebGL or a student who cannot perform pointer gestures.
+          Hidden by default so the 3D room stays the primary interface. */}
       <div
         className={cn(
           "absolute bottom-0 right-0 top-0 z-30 w-80 max-w-[85vw] transition-transform",
-          drawer === "actions" ? "translate-x-0" : "translate-x-full",
+          accessibilityOpen ? "translate-x-0" : "translate-x-full",
         )}
-        aria-hidden={drawer === "actions" ? undefined : true}
+        aria-hidden={accessibilityOpen ? undefined : true}
       >
-        {drawer === "actions" ? (
+        {accessibilityOpen ? (
           <div className="h-full overflow-y-auto bg-surface px-3 py-3 shadow-xl">
             <ActionPanel initialState={initialState} />
           </div>
@@ -304,7 +341,12 @@ export function ImmersiveLab({ initialState }: { initialState: LabStateView }) {
       ) : null}
 
       {/* One "everything off" control, for anyone who wants the room back. */}
-      {drawer !== null || promptOpen || readingMode ? (
+      {drawer !== null ||
+      promptOpen ||
+      readingMode ||
+      helpOpen ||
+      accessibilityOpen ||
+      recorder !== null ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-24 z-40 flex justify-center">
           <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={closeEverything}>
             Back to the laboratory

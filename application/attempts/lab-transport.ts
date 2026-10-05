@@ -25,7 +25,6 @@ export interface LabActionOk {
   code: string | null;
   message: string | null;
   colour: string | null;
-  calculationCorrect: boolean | null;
   revision: number;
   publicState: TitrationPublicState;
 }
@@ -114,7 +113,6 @@ export async function runLabAction(
       code: result.code,
       message: result.message,
       colour: result.colour,
-      calculationCorrect: result.calculationCorrect,
       revision: result.revision,
       publicState: result.public,
     };

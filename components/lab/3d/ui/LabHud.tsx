@@ -10,6 +10,7 @@ import { holdSpecFor } from "../interactions/carry";
 import { rotationLabel } from "../simulation/keymap";
 import { tiltLabel } from "../interactions/hold";
 import { dropCountLabel } from "../interactions/drops";
+import { recorderSpecsFor } from "./RecorderOverlay";
 
 /** How long a refusal stays on screen before the laboratory is quiet again. */
 const NOTICE_MS = 6000;
@@ -24,26 +25,29 @@ const NOTICE_MS = 6000;
  * anything that can be done to a piece of apparatus is offered by the
  * contextual prompt instead of by a button that is always on screen.
  *
- * The two button groups are distinguished on purpose: INTERACT opens the
- * contextual prompt for what you are looking at, while Procedure / Actions /
- * Results open the full text surfaces, which remain the accessible path to
- * every step.
+ * The button groups are distinguished on purpose: INTERACT opens the
+ * contextual prompt for what you are looking at; RECORD opens the single
+ * recording station; PROCEDURE / ACCESSIBLE LAB / RESULTS open the full text
+ * surfaces, which remain the accessible path to every step; HELP explains
+ * without performing.
  */
 
 export function LabHud({
   experimentNumber,
   partLabel,
   onProcedure,
-  onActions,
+  onAccessible,
   onResults,
+  onHelp,
   drawer,
 }: {
   experimentNumber: number;
   partLabel: string;
   onProcedure: () => void;
-  onActions: () => void;
+  onAccessible: () => void;
   onResults: () => void;
-  drawer: "procedure" | "actions" | "results" | null;
+  onHelp: () => void;
+  drawer: "procedure" | "results" | null;
 }) {
   const stage = useActiveStage();
   const model = useLabViewModel();
@@ -61,9 +65,17 @@ export function LabHud({
     setPromptOpen,
     activeStageKey,
     stopcockAngleForStage,
+    recorder,
+    setRecorder,
+    helpOpen,
+    accessibilityOpen,
   } = useLabUi();
 
   const valve = stopcockNotchFor(stopcockAngleForStage(activeStageKey));
+
+  // One recording station (§28): the HUD offers it only when the stage actually
+  // has a reading waiting, so the button never opens an empty dialog.
+  const recordable = recorderSpecsFor({ stage, solution: model.solution });
 
   // A refusal explains itself once and then gets out of the way: the pill is a
   // message from the laboratory, not another permanent panel.
@@ -121,14 +133,27 @@ export function LabHud({
           >
             Interact
           </Button>
+          {recordable.length > 0 ? (
+            <Button
+              size="sm"
+              variant={recorder !== null ? "primary" : "secondary"}
+              onClick={() => setRecorder(recordable[0].kind)}
+              aria-expanded={recorder !== null}
+            >
+              Record
+            </Button>
+          ) : null}
           <Button size="sm" variant="secondary" onClick={onProcedure} aria-expanded={drawer === "procedure"}>
             Procedure
           </Button>
-          <Button size="sm" variant="secondary" onClick={onActions} aria-expanded={drawer === "actions"}>
-            Actions
+          <Button size="sm" variant="secondary" onClick={onAccessible} aria-expanded={accessibilityOpen}>
+            Accessible lab
           </Button>
           <Button size="sm" variant="secondary" onClick={onResults} aria-expanded={drawer === "results"}>
             Results
+          </Button>
+          <Button size="sm" variant={helpOpen ? "primary" : "secondary"} onClick={onHelp} aria-expanded={helpOpen}>
+            Help
           </Button>
           <Link
             href="/student/experiments"

@@ -141,6 +141,12 @@ export interface BuretteView {
   fillFraction: number;
   /** True once the burette has been rinsed, filled and clamped. */
   setup: boolean;
+  /**
+   * True while the burette hangs on the stand clamp. A PHYSICAL fact about the
+   * student's own hands, distinct from `setup` (filled): the clamp is the
+   * precondition for filling, and the surface states it (§13, §33).
+   */
+  mounted: boolean;
 }
 
 export interface ConcordanceView {
@@ -356,6 +362,7 @@ function buretteView(stage: StageSession, stageConfig: PublicStageView): Burette
     readingMl: reading,
     fillFraction: reading === null ? 0 : Math.max(0, Math.min(1, 1 - reading / capacityMl)),
     setup: stage.apparatusReady,
+    mounted: stage.world.buretteMounted === true,
   };
 }
 

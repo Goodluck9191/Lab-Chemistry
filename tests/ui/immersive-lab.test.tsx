@@ -52,7 +52,7 @@ describe("immersive laboratory shell (jsdom)", () => {
     // Drawers open on demand and host the same panels.
     await user.click(screen.getByRole("button", { name: /^procedure$/i }));
     expect(screen.getByRole("complementary", { name: "Procedure" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getByRole("button", { name: /^accessible lab$/i }));
     expect(screen.getAllByText(/prepare the working solution/i).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: /^results$/i }));
     expect(screen.getByRole("dialog", { name: /results and data/i })).toBeTruthy();

@@ -62,7 +62,7 @@ async function openLab(
 }
 
 async function openActionsDrawer(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: /^actions$/i }));
+  await user.click(screen.getByRole("button", { name: /^accessible lab$/i }));
 }
 
 describe("selecting apparatus in the laboratory drives the action panel", () => {

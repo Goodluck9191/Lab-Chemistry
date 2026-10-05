@@ -8,20 +8,18 @@ import { useActiveStage, useLabServer, useLabViewModel } from "./lab-state-provi
 import { ReadingInput, readingIsUsable } from "./reading-input";
 import type { LabStateView } from "@/application/attempts/lab-state";
 
-/** Round for display only; the graded value is whatever the student submits. */
-function round6(value: number): number {
-  return Math.round(value * 1_000_000) / 1_000_000;
-}
-
 /**
  * Calculation workspace.
  *
- * WHAT THE SERVER CAN GRADE: the concentration the student reports for a
- * recorded trial. That is submitted with the existing protocol action
- * `report_molarity`, which checks it against the hidden reality and answers
- * correct / not correct — it never sends the expected value back.
+ * WHAT IS RECORDED AND GRADED: the concentration the student reports for a
+ * recorded trial, submitted with `report_molarity`, and — since this phase — the
+ * other declared calculations submitted as unmarked drafts with
+ * `submit_calculation`. Both are persisted server-side; NEITHER returns a
+ * verdict while the practical is live (§20, §23). Correctness is recomputed
+ * after submission from hidden state, whose expected values never cross to the
+ * browser.
  *
- * WHAT IT CANNOT: the intermediate moles step has no protocol action at all, so
+ * WHAT IT CANNOT: the intermediate moles step has no declared prompt yet, so
  * this panel presents it as formula guidance to work out by hand instead of
  * pretending to mark it. The check for that is honest and prominent rather than
  * a fake "submitted" state.
@@ -33,7 +31,7 @@ function round6(value: number): number {
 export function CalculationPanel({ initialState }: { initialState: LabStateView }) {
   const stage = useActiveStage();
   const stages = useLabViewModel().stages;
-  const { perform, pending, canWrite, state } = useLabServer();
+  const { perform, pending, canWrite } = useLabServer();
   const [values, setValues] = useState<Record<string, string>>({});
 
   if (!stage) return null;
@@ -42,8 +40,6 @@ export function CalculationPanel({ initialState }: { initialState: LabStateView 
   const prompts = initialState.calculationPrompts.filter((prompt) => prompt.stageKey === stage.key);
   const ungraded = initialState.ungradedCalculations;
   const disabled = !canWrite || pending;
-
-  const lastOutcome = state.lastOutcome;
 
   return (
     <section aria-label="Calculations" className="flex flex-col gap-3">
@@ -101,9 +97,9 @@ export function CalculationPanel({ initialState }: { initialState: LabStateView 
           <div key={draftKey} className="rounded-md border border-line px-3 py-3">
             <p className="text-sm font-medium">{prompt.label}</p>
             <p className="mt-1 text-xs text-muted">
-              Use your own readings from trial {prompt.trialNumber}. The laboratory checks the value
-              against the simulation and tells you whether it agrees; it never shows the value it
-              expected.
+              Use your own readings from trial {prompt.trialNumber}. The laboratory records the
+              value you submit and marks it only after you submit the attempt; it never shows you
+              the value it expected, and it gives no verdict while the practical is live.
             </p>
             <div className="mt-2 flex flex-wrap items-end gap-3">
               <ReadingInput
@@ -138,19 +134,6 @@ export function CalculationPanel({ initialState }: { initialState: LabStateView 
           </div>
         );
       })}
-
-      {lastOutcome !== null && lastOutcome.calculationCorrect !== null ? (
-        <p
-          className={
-            "text-xs " + (lastOutcome.calculationCorrect ? "text-success" : "text-warning")
-          }
-          role="status"
-        >
-          {lastOutcome.calculationCorrect
-            ? "The last concentration you submitted agrees with the simulation within the accepted tolerance."
-            : "The last concentration you submitted is outside the accepted tolerance. Check the readings and your arithmetic."}
-        </p>
-      ) : null}
 
       {ungraded.length > 0 ? (
         <div className="rounded-md border border-dashed border-line-strong px-3 py-3">
@@ -226,36 +209,20 @@ function TrialWorkingBreakdown({
   return (
     <div className="flex flex-col gap-2" aria-label="Trial working">
       {recorded.map((trial) => {
-        const titreL = trial.titreMl !== null ? trial.titreMl / 1000 : null;
         let inputs: string;
         let formula: string;
-        let preview: string | null;
         if (portion.kind === "weighed_mass") {
           inputs =
             portion.recordedMassG !== null && trial.titreMl !== null
               ? `KHP mass ${portion.recordedMassG} g · initial ${trial.initialReadingMl ?? "—"} mL · final ${trial.finalReadingMl ?? "—"} mL · titre ${trial.titreMl} mL`
               : "Weigh the KHP by difference and record the burette readings first.";
           formula = `n(KHP) = m ÷ ${analyteMolarMassGPerMol ?? "204.2223"} g/mol; M(NaOH) = n ÷ V (1:1)`;
-          preview =
-            portion.recordedMassG !== null &&
-            analyteMolarMassGPerMol !== null &&
-            titreL !== null &&
-            titreL > 0
-              ? `${round6(portion.recordedMassG / analyteMolarMassGPerMol / titreL)}`
-              : null;
         } else {
           inputs =
             portion.recordedVolumeMl !== null && trial.titreMl !== null
               ? `HCl aliquot ${portion.recordedVolumeMl} mL · NaOH titre ${trial.titreMl} mL · standardised NaOH ${standardisedNaohMolarityM !== null ? `${standardisedNaohMolarityM} mol/L` : "pending"}`
               : "Measure the HCl aliquot and record the NaOH titre first.";
           formula = "n(NaOH) = M × V; M(HCl) = n ÷ V(HCl) (1:1)";
-          preview =
-            portion.recordedVolumeMl !== null &&
-            portion.recordedVolumeMl > 0 &&
-            titreL !== null &&
-            standardisedNaohMolarityM !== null
-              ? `${round6(((standardisedNaohMolarityM * titreL) / (portion.recordedVolumeMl / 1000)))}`
-              : null;
         }
         return (
           <div key={`${stageKey}-working-${trial.trialNumber}`} className="rounded-md border border-line px-3 py-2 text-xs">
@@ -273,15 +240,9 @@ function TrialWorkingBreakdown({
               </div>
               <div className="flex gap-1.5">
                 <dt className="shrink-0 font-semibold text-muted">Result:</dt>
-                <dd>
-                  {preview !== null ? (
-                    <span>
-                      <span className="font-medium tabular-nums">{preview}</span> mol/L (your working —
-                      check it, then submit below)
-                    </span>
-                  ) : (
-                    <span className="text-muted">Not enough recorded measurements yet.</span>
-                  )}
+                <dd className="text-muted">
+                  Work this out yourself from the inputs above, then record your value below. The
+                  laboratory does not compute it for you.
                 </dd>
               </div>
               <div className="flex gap-1.5">

@@ -6,7 +6,7 @@ import type { LabActionOutcome } from "@/application/attempts/lab-transport";
 import { SIMULATION_PROTOCOL_VERSION } from "@/domain/simulation/titration/protocol";
 import type { TitrationProtocolAction } from "@/domain/simulation/titration/protocol";
 import { dispatchTitrationAction } from "@/domain/simulation/titration/dispatch";
-import { setupApparatus, toPublicJSON, type TitrationSession } from "@/domain/simulation/titration/engine";
+import { mountBurette, setupApparatus, toPublicJSON, type TitrationSession } from "@/domain/simulation/titration/engine";
 import { PreparationControls } from "@/components/lab/preparation-controls";
 import { TitrationControls } from "@/components/lab/titration-controls";
 
@@ -52,6 +52,7 @@ vi.setConfig({ testTimeout: 30_000 });
 /** Stage B active (A concordant) with its burette already set up. */
 function stageBReady() {
   const session = concordantStageASession("instrument-flow-seed");
+  mountBurette(session, STAGE_B, true);
   setupApparatus(session, STAGE_B, "naoh", 0);
   return session;
 }
@@ -72,7 +73,6 @@ function liveSend(session: TitrationSession) {
       code: outcome.code,
       message: outcome.message,
       colour: outcome.colour,
-      calculationCorrect: outcome.calculationCorrect,
     });
   });
 }
@@ -195,17 +195,28 @@ describe("balance guided flow (jsdom)", () => {
 
     renderLabPanels({ state, send, panels: <PreparationControls initialState={state} /> });
 
+    // Stand the beaker on the pan, read it, then lift it off, dose the standard
+    // in and stand it back on the pan to re-weigh — weighing by difference.
+    await user.click(screen.getByRole("button", { name: /place weighing bottle/i }));
+    await user.click(screen.getByRole("button", { name: /tare the balance/i }));
     await user.type(screen.getByLabelText(/empty beaker mass/i), "52.34");
     await user.click(screen.getByRole("button", { name: /record empty weighing/i }));
-    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+
+    await user.click(screen.getByRole("button", { name: /add potassium/i }));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(5));
 
     await user.type(screen.getByLabelText(/beaker plus KHP mass/i), "52.94");
     await user.click(screen.getByRole("button", { name: /record KHP weighing/i }));
-    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(6));
 
     const actions = send.mock.calls.map((call) => (call[0] as { action: unknown }).action);
     expect(actions).toEqual([
+      { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true },
       { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 },
+      { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: false },
+      { type: "add_khp", stageKey: STAGE_A },
+      { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true },
       { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.94 },
     ]);
     // The derived sample mass comes from the server state, not the inputs.
@@ -236,11 +247,15 @@ describe("preparation journey (jsdom)", () => {
     await user.click(screen.getByRole("button", { name: /condition with naoh \(0\/3\)/i }));
     await user.click(screen.getByRole("button", { name: /condition with naoh \(1\/3\)/i }));
     await user.click(screen.getByRole("button", { name: /condition with naoh \(2\/3\)/i }));
+    await user.click(screen.getByRole("button", { name: /clamp on the stand/i }));
     await user.type(screen.getByLabelText(/initial burette reading/i), "0.00");
     await user.click(screen.getByRole("button", { name: /fill burette/i }));
     await user.click(screen.getByRole("button", { name: /clear air bubble/i }));
+    await user.click(screen.getByRole("button", { name: /place weighing bottle/i }));
+    await user.click(screen.getByRole("button", { name: /tare the balance/i }));
     await user.type(screen.getByLabelText(/empty beaker mass/i), "52.34");
     await user.click(screen.getByRole("button", { name: /record empty weighing/i }));
+    await user.click(screen.getByRole("button", { name: /add potassium/i }));
     await user.type(screen.getByLabelText(/beaker plus KHP mass/i), "52.94");
     await user.click(screen.getByRole("button", { name: /record KHP weighing/i }));
     await user.click(screen.getByRole("button", { name: /dissolve in water/i }));
@@ -250,7 +265,7 @@ describe("preparation journey (jsdom)", () => {
     await user.click(screen.getByRole("button", { name: /^add drops$/i }));
     await user.click(screen.getByRole("button", { name: /^place under burette$/i }));
 
-    await waitFor(() => expect(send).toHaveBeenCalledTimes(18));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(23));
     const actions = send.mock.calls.map((call) => (call[0] as { action: unknown }).action);
     expect(actions).toEqual([
       { type: "measure_naoh_stock", stageKey: STAGE_A, observedVolumeMl: 10 },
@@ -261,9 +276,14 @@ describe("preparation journey (jsdom)", () => {
       { type: "condition_burette", stageKey: STAGE_A },
       { type: "condition_burette", stageKey: STAGE_A },
       { type: "condition_burette", stageKey: STAGE_A },
+      { type: "mount_burette", stageKey: STAGE_A, mounted: true },
       { type: "setup_apparatus", stageKey: STAGE_A, titrantKey: "naoh", initialReadingMl: 0 },
       { type: "clear_air_bubble", stageKey: STAGE_A },
+      { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true },
       { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.34 },
+      { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: false },
+      { type: "add_khp", stageKey: STAGE_A },
+      { type: "place_beaker_on_balance", stageKey: STAGE_A, onPan: true },
       { type: "weigh_beaker", stageKey: STAGE_A, observedMassG: 52.94 },
       { type: "dissolve_khp", stageKey: STAGE_A },
       { type: "transfer_solution", stageKey: STAGE_A },
@@ -305,7 +325,7 @@ describe("benchware participation (jsdom)", () => {
     const user = await openPrompt(state);
 
     await user.click(screen.getByRole("button", { name: "Waste" }));
-    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getByRole("button", { name: /^accessible lab$/i }));
 
     // The discarded trial is reported in words, not only drawn as a fuller bin.
     expect(screen.getByText(/1 trial discarded so far/i)).toBeTruthy();
@@ -317,7 +337,7 @@ describe("benchware participation (jsdom)", () => {
     const user = await openPrompt(state);
 
     // The prompt sits over the world while the drawer hosts the full panel.
-    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getByRole("button", { name: /^accessible lab$/i }));
 
     await user.click(screen.getByRole("button", { name: "Beaker" }));
     expect(screen.getByText("Selected: Beaker")).toBeTruthy();
@@ -331,7 +351,7 @@ describe("benchware participation (jsdom)", () => {
     const state = labStateViewFor(session);
     const user = await openPrompt(state);
     await user.click(screen.getByRole("button", { name: "Cylinder" }));
-    await user.click(screen.getByRole("button", { name: /^actions$/i }));
+    await user.click(screen.getByRole("button", { name: /^accessible lab$/i }));
 
     const text = document.body.textContent ?? "";
     expect(text).not.toContain("instrument-flow-seed");

@@ -26,7 +26,6 @@ describe("dispatch stage ordering", () => {
     expect(setup.message).toContain("locked");
     expect(setup.message).toContain("Stage A");
     expect(setup.colour).toBeNull();
-    expect(setup.calculationCorrect).toBeNull();
     // Nothing was written: the locked stage is untouched.
     expect(session.public.stages[STAGE_B].apparatusReady).toBe(false);
   });
@@ -76,6 +75,8 @@ describe("dispatch stage ordering", () => {
     expect(apply({ type: "condition_burette", stageKey: STAGE_A }).accepted).toBe(true);
     expect(apply({ type: "condition_burette", stageKey: STAGE_A }).accepted).toBe(true);
     expect(apply({ type: "condition_burette", stageKey: STAGE_A }).accepted).toBe(true);
+    // The burette is clamped on the stand before it can be filled.
+    expect(apply({ type: "mount_burette", stageKey: STAGE_A, mounted: true }).accepted).toBe(true);
     const outcome = apply({
       type: "setup_apparatus",
       stageKey: STAGE_A,

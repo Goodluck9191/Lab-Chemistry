@@ -6,6 +6,7 @@ import {
   completeTrial,
   createTitrationSession,
   gradeSession,
+  mountBurette,
   pipetteAnalyte,
   readBurette,
   reportMolarity,
@@ -23,6 +24,7 @@ const STAGE_B = "stage-b-hcl-naoh";
 function runPerfectStageATrial(session: ReturnType<typeof createTitrationSession>, trialNumber: number, initialMl: number) {
   const hidden = session.hidden.stages[STAGE_A];
   if (trialNumber === 1) {
+    expect(mountBurette(session, STAGE_A, true).ok).toBe(true);
     expect(setupApparatus(session, STAGE_A, "naoh", initialMl).ok).toBe(true);
     expect(weighAnalyte(session, STAGE_A, 0.6).ok).toBe(true);
     expect(addIndicator(session, STAGE_A, 3).ok).toBe(true);
@@ -81,6 +83,7 @@ describe("titration engine lifecycle", () => {
 
   it("discards overshot trials instead of failing the attempt", () => {
     const session = createTitrationSession(exp02TitrationConfig, "seed-over");
+    mountBurette(session, STAGE_A, true);
     setupApparatus(session, STAGE_A, "naoh", 0);
     weighAnalyte(session, STAGE_A, 0.6);
     addIndicator(session, STAGE_A, 3);
@@ -99,6 +102,7 @@ describe("titration engine lifecycle", () => {
   it("runs Stage B (pipetted HCl) end to end", () => {
     const session = createTitrationSession(exp02TitrationConfig, "persona-b");
     const hidden = session.hidden.stages[STAGE_B];
+    mountBurette(session, STAGE_B, true);
     setupApparatus(session, STAGE_B, "naoh", 0);
     expect(pipetteAnalyte(session, STAGE_B, 25).ok).toBe(true);
     expect(addIndicator(session, STAGE_B, 4).ok).toBe(true);

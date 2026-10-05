@@ -22,7 +22,6 @@ function acceptedResult(revision = 5): TitrationActionResult {
     revision,
     public: toPublicJSON(concordantStageASession()),
     colour: "faint_pink",
-    calculationCorrect: null,
   };
 }
 
@@ -60,7 +59,6 @@ describe("laboratory action transport", () => {
           revision: 6,
           public: toPublicJSON(freshSession()),
           colour: null,
-          calculationCorrect: null,
         })),
       }),
       { attemptId: ATTEMPT_ID },
